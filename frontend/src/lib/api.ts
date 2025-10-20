@@ -114,3 +114,83 @@ export function search(
 export function fetchPreview(url: string) {
   return api.get<FetchPreviewResponse>("/debug/check_url", { params: { u: url }, timeout: 0 });
 }
+
+// ===== MySQL API =====
+export type MySQLActivity = {
+  id: number;
+  sheet_name: string;
+  row_number: number;
+  full_name: string;  // Tên đơn vị
+  mssv: string;  // STT
+  unit: string;  // Mảng hoạt động
+  program: string;  // Tên chương trình
+  score?: number;
+};
+
+export type MySQLSearchResponse = {
+  ok: boolean;
+  query: string;
+  search_type?: string;
+  results: MySQLActivity[];
+  count: number;
+  execution_time_ms: number;
+};
+
+export type MySQLCountResponse = {
+  ok: boolean;
+  count: number;
+};
+
+export function mysqlSearch(q: string, limit: number = 50) {
+  return api.get<MySQLSearchResponse>("/mysql/ctv/search", { 
+    params: { q, limit },
+    timeout: 10000
+  });
+}
+
+export function mysqlSearchByName(q: string, limit: number = 50) {
+  return api.get<MySQLSearchResponse>("/mysql/ctv/search_name", {
+    params: { q, limit },
+    timeout: 10000
+  });
+}
+
+export function mysqlCount() {
+  return api.get<MySQLCountResponse>("/mysql/ctv/count", { timeout: 5000 });
+}
+
+// ===== Add Link API =====
+export type AddLinkRequest = {
+  url: string;
+  sheet: string;
+  row: number;
+  col?: number;
+};
+
+export type AddLinkResponse = {
+  ok: boolean;
+  link?: {
+    url: string;
+    sheet: string;
+    row: number;
+    col: number;
+    address: string;
+    gid: string | null;
+    sheet_name: string | null;
+  };
+  total_links?: number;
+  message?: string;
+  error?: string;
+};
+
+export function addLink(data: AddLinkRequest) {
+  return api.post<AddLinkResponse>("/add_link", null, {
+    params: {
+      url: data.url,
+      sheet: data.sheet,
+      row: data.row,
+      col: data.col || 1,
+    },
+    timeout: 5000,
+  });
+}

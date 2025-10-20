@@ -1,0 +1,20 @@
+{
+  "url": "https://www.iana.org/domains/example",
+  "matches": [
+    {
+      "name": "Example",
+      "found": true,
+      "snippet": "Example Domains Domains Protocols Numbers About Example D"
+    },
+    {
+      "name": "Alice",
+      "found": false,
+      "snippet": ""
+    },
+    {
+      "name": "Bob",
+      "found": false,
+      "snippet": ""
+    }
+  ]
+}

@@ -1,0 +1,20 @@
+{
+  "url": "https://www.example.com",
+  "matches": [
+    {
+      "name": "Example",
+      "found": true,
+      "snippet": "Example Domain Example Domain This domain is for use in i"
+    },
+    {
+      "name": "Alice",
+      "found": false,
+      "snippet": ""
+    },
+    {
+      "name": "Bob",
+      "found": false,
+      "snippet": ""
+    }
+  ]
+}

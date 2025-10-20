@@ -19,6 +19,8 @@ export default function Header() {
         <nav className="flex gap-2">
           <NavItem to="/">Trang chủ</NavItem>
           <NavItem to="/search">Tìm kiếm</NavItem>
+          <NavItem to="/mysql">search nhanh hơn</NavItem>
+          <NavItem to="/add-link">➕ Thêm Link</NavItem>
           <NavItem to="/sheets">Sheets</NavItem>
           <NavItem to="/health">Health</NavItem>
         </nav>
