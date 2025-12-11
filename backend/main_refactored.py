@@ -1,0 +1,136 @@
+"""
+Refactored main application with Swagger/OpenAPI documentation.
+"""
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+
+from backend.routers import search_router, mysql_router, links_router, admin_router
+from backend.config import USE_DEEP, HAS_GSPREAD
+
+# ============= FastAPI App with OpenAPI =============
+app = FastAPI(
+    title="CTV Link-aware Search API",
+    description="""
+## Tổng quan
+
+API tìm kiếm thông minh cho hệ thống CTV, hỗ trợ:
+
+- **Tìm kiếm fuzzy**: Tìm kiếm với Vietnamese có dấu/không dấu
+- **MySQL FULLTEXT**: Tìm kiếm nhanh với database indexing
+- **Link management**: Quản lý và tìm kiếm trong links
+- **Google Sheets integration**: Sync dữ liệu từ Google Sheets
+
+## Các tính năng chính
+
+### Search
+- Tìm kiếm trong dữ liệu đã index
+- Hỗ trợ fuzzy matching với rapidfuzz
+- Vietnamese text normalization
+- Extract snippets với highlight
+
+### MySQL
+- FULLTEXT search (10-100x nhanh hơn)
+- Vietnamese FULLTEXT index support
+- Real-time search trong 318 activities
+
+### Links
+- Quản lý 637+ links từ Google Sheets
+- Thêm links mới qua API
+- Auto-sync vào MySQL
+- Support Google Sheets gid extraction
+
+### Admin
+- Health check & system stats
+- Rebuild index từ Google Sheets
+- Sync data vào MySQL
+- Deep scan cho rich-text links
+
+## Authentication
+
+Hiện tại API không yêu cầu authentication (CORS enabled cho mọi origin).
+
+## Rate Limiting
+
+Không có rate limiting. Sử dụng hợp lý! 😊
+    """,
+    version="3.0.0",
+    docs_url="/docs",
+    redoc_url="/redoc",
+    openapi_url="/openapi.json",
+    contact={
+        "name": "CTV Search Team",
+        "email": "support@ctv-search.example.com"
+    },
+    license_info={
+        "name": "MIT License",
+        "url": "https://opensource.org/licenses/MIT"
+    }
+)
+
+# ============= CORS =============
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# ============= Routers =============
+app.include_router(search_router.router)
+app.include_router(mysql_router.router)
+app.include_router(links_router.router)
+app.include_router(admin_router.router)
+
+# ============= Root Endpoint =============
+@app.get(
+    "/",
+    tags=["Root"],
+    summary="API Root",
+    description="Thông tin cơ bản về API"
+)
+async def root():
+    """Root endpoint with API info."""
+    return {
+        "name": "CTV Link-aware Search API",
+        "version": "3.0.0",
+        "docs": "/docs",
+        "redoc": "/redoc",
+        "openapi": "/openapi.json",
+        "features": {
+            "fuzzy_search": True,
+            "mysql_fulltext": True,
+            "link_management": True,
+            "google_sheets_sync": HAS_GSPREAD,
+            "deep_scan": USE_DEEP
+        },
+        "endpoints": {
+            "search": "/api/search",
+            "mysql": "/api/mysql",
+            "links": "/api/links",
+            "admin": "/api/admin"
+        }
+    }
+
+
+# ============= Startup Event =============
+@app.on_event("startup")
+async def startup_event():
+    """Initialize on startup."""
+    from backend.config import DATABASE_ROWS, SHEETS, debug_log as _dlog
+    from backend.services.index_service import IndexService
+    
+    _dlog("[startup] Building initial index...")
+    
+    try:
+        rows, sheets = IndexService.build_index(verbose=False, deep=USE_DEEP)
+        DATABASE_ROWS.extend(rows)
+        SHEETS.extend(sheets)
+        _dlog(f"[startup] Index ready: {len(DATABASE_ROWS)} rows, {len(SHEETS)} sheets")
+    except Exception as e:
+        _dlog(f"[startup] Index build failed: {e}")
+
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)

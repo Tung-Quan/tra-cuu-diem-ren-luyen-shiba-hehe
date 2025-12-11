@@ -6,6 +6,7 @@ CREATE TABLE person (
   full_name      VARCHAR(255) COLLATE utf8mb4_vi_0900_ai_ci,
   family_name    VARCHAR(128) COLLATE utf8mb4_vi_0900_ai_ci NULL,
   given_name     VARCHAR(128) COLLATE utf8mb4_vi_0900_ai_ci NULL,
+  student_no     VARCHAR(50)  COLLATE utf8mb4_vi_0900_ai_ci NULL,
   -- cột gộp để tìm kiếm: nếu có full_name thì dùng, nếu không thì ghép "family_name given_name"
   search_name    VARCHAR(255) AS (
                    COALESCE(full_name, CONCAT_WS(' ', family_name, given_name))

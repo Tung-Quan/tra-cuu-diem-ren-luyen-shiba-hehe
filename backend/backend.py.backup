@@ -19,50 +19,6 @@ import httpx
 from bs4 import BeautifulSoup
 from urllib.parse import urlparse, parse_qs
 
-# =========================
-# Local Utility Imports  
-# =========================
-# from backend.utils.text_processing import (
-#     fix_vietnamese_text,
-#     fold_vietnamese,
-#     normalize_query,
-#     decode_http_response
-# )
-
-# from backend.utils.url_helpers import (
-#     extract_gsheets_file_id,
-#     extract_gid_from_url,
-#     is_google_sheets_url,
-#     is_google_docs_url,
-#     classify_google_url,
-#     build_gsheets_csv_export,
-#     normalize_to_gsheets_csv_export,
-#     export_candidates,
-#     clean_urls,
-#     URL_RE
-# )
-
-# from backend.utils.csv_helpers import (
-#     read_csv_text,
-#     read_csv_bytes,
-#     csv_to_text,
-#     safe_fetch_csv_text,
-#     xlsx_bytes_to_csvtext,
-#     rows_from_xlsx_bytes
-# )
-
-# from backend.utils.google_api import (
-#     get_gspread_client,
-#     get_sheets_service,
-#     get_drive_service,
-#     get_drive_file_meta,
-#     download_drive_file,
-#     get_sheet_values_by_gid,
-#     get_sheet_values_as_csv,
-#     deep_scan_all_sheets
-# )
-
-
 # ---- Google Sheets via gspread (values/formulas) ----
 try:
     import gspread
@@ -108,31 +64,51 @@ app.add_middleware(
 )
 
 # =========================
-# Configuration (imported from config module)
+# Config
 # =========================
-from config import (
-    DEFAULT_SPREADSHEET_ID,
-    GOOGLE_CREDS,
-    USE_DEEP,
-    HAS_GSPREAD,
-    HAS_GOOGLE_API,
-    HAS_MYSQL,
-    DATABASE_ROWS,
-    SHEETS,
-    LINK_POOL,
-    LINK_POOL_LIST,
-    LINK_POOL_MAP,
-    GSPREAD_SKIP_IDS,
-    URL_ACCESS_CACHE,
-    DRIVE_META_CACHE,
-    DEBUG_LOG,
-    STATS,
-    debug_log as _dlog,
-    db_mysql
+DEFAULT_SPREADSHEET_ID = os.environ.get(
+    "SPREADSHEET_ID",
+    "1-ypUyKglUjblgy1Gy0gITcdHF4YLdJnaCNKM_6_fCrI"  # đổi ID nếu cần
 )
+GOOGLE_CREDS = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS", "credentials.json")
+USE_DEEP = os.environ.get("DEEP_INDEX", "1").lower() in ("1", "true", "yes")
 
+# =========================
+# Globals (in-memory DB)
+# =========================
+DATABASE_ROWS: List[Dict[str, Any]] = []   # row records for quick search
+SHEETS: List[str] = []                     # sheet titles
+LINK_POOL: Dict[str, List[Dict[str, Any]]] = {}   # map: url -> list loc (giữ tương thích)
+LINK_POOL_LIST: List[Dict[str, Any]] = []         # list phẳng: mỗi phần tử là 1 link+vị trí
+LINK_POOL_MAP: Dict[str, List[Dict[str, Any]]] = {}
+import re
+from urllib.parse import urlparse, parse_qs
 
+_GSHEETS_ID_PATTERNS = [
+    r"/spreadsheets/d/([a-zA-Z0-9-_]+)",    # docs.google.com/spreadsheets/d/<id>
+    r"/file/d/([a-zA-Z0-9-_]+)",            # drive.google.com/file/d/<id>
+    r"[?&]id=([a-zA-Z0-9-_]+)",             # ...?id=<id>
+    r"/export/.*/\*/([a-zA-Z0-9-_]+)",      # googleusercontent.com/export/.../*/<id>
+]
 
+def extract_gsheets_file_id(u: str) -> str | None:
+    for pat in _GSHEETS_ID_PATTERNS:
+        m = re.search(pat, u)
+        if m:
+            return m.group(1)
+    return None
+
+def extract_gid(u: str) -> str | None:
+    try:
+        p = urlparse(u)
+        qgid = (parse_qs(p.query or "").get("gid") or [None])[0]
+        if qgid: return qgid
+        if p.fragment:
+            m = re.search(r"gid=(\d+)", p.fragment)
+            if m: return m.group(1)
+    except Exception:
+        pass
+    return None
 import requests
 
 def _safe_fetch_csv_text(u: str, gid: str | None = None) -> tuple[str | None, dict]:
@@ -212,8 +188,102 @@ def _cp1252_to_utf8(s: str) -> Optional[str]:
     except Exception:
         return None
 
+def vn_strict_fix(s: str) -> str:
+    """
+    Sửa tiếng Việt *mạnh tay* cho các chuỗi đã bị dán sai mã:
+    1) ftfy.fix_encoding
+    2) latin-1 -> utf-8 (nếu còn lỗi dấu)
+    3) cp1252  -> utf-8 (nếu còn)
+    4) ftfy.fix_text + chuẩn hoá Unicode NFC
+    """
+    if s is None:
+        return ""
+    s0 = str(s)
 
+    # Bước 1: thử fix_encoding
+    try:
+        s1 = fix_encoding(s0)
+    except Exception:
+        s1 = s0
 
+    # Nếu vẫn còn dấu hiệu mojibake, thử latin-1 -> utf-8
+    if _looks_mojibake(s1):
+        s2 = _latin1_to_utf8(s1) or s1
+    else:
+        s2 = s1
+
+    # Nếu vẫn còn, thử cp1252 -> utf-8
+    if _looks_mojibake(s2):
+        s3 = _cp1252_to_utf8(s2) or s2
+    else:
+        s3 = s2
+
+    # Bước cuối: dọn dẹp ký tự lạ + chuẩn hoá Unicode
+    try:
+        s4 = fix_text(s3)
+    except Exception:
+        s4 = s3
+
+    s4 = s4.replace("\u00A0", " ").replace("\u200b", "")
+    s4 = re.sub(r"[ \t]+", " ", s4)
+    s4 = re.sub(r"\n{3,}", "\n\n", s4)
+    s4 = unicodedata.normalize("NFC", s4)
+
+    return s4.strip()
+
+def vn_fix_if_needed(s: str) -> str:
+    """
+    Sửa tiếng Việt ngay từ đầu:
+    - Nếu phát hiện các pattern mojibake -> dùng fix_encoding (mạnh nhất cho UTF-8 bị decode sai)
+    - Sau đó chạy fix_text để dọn ký tự lạ/khoảng trắng.
+    - Không 'ép' lại encode/decode lần nữa để tránh hỏng chuỗi đã đúng.
+    """
+    try:
+        # Chỉ gọi fix_encoding khi thực sự thấy dấu hiệu mojibake để tránh overfix
+        if any(sign in s for sign in _MOJIBAKE_SIGNS):
+            from ftfy import fix_encoding  # import nội bộ để cảm giác nhẹ ký sinh
+            s = fix_encoding(s)
+        s = fix_text(s)
+    except Exception:
+        pass
+    # Chuẩn hóa khoảng trắng phổ biến
+    s = s.replace("\u00A0", " ").replace("\u200b", "")  # NBSP, zero-width space
+    s = re.sub(r"[ \t]+", " ", s)
+    s = re.sub(r"\n{3,}", "\n\n", s)
+    return s.strip()
+
+def http_decode_bytes(resp) -> str:
+    """
+    Giải mã bytes HTTP theo UTF-8 trước, fallback sang encoding server báo,
+    rồi cuối cùng mới đến 'replace'. Không dùng .text ngay để tránh decode sai sớm.
+    """
+    # 1) Ưu tiên utf-8-sig (lo BOM) -> utf-8
+    try:
+        return resp.content.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        pass
+
+    # 2) Thử encoding mà server gợi ý / chẩn đoán
+    enc: Optional[str] = None
+    try:
+        enc = getattr(resp, "encoding", None)
+        if not enc:
+            enc = getattr(resp, "apparent_encoding", None)
+    except Exception:
+        enc = None
+
+    if enc:
+        try:
+            return resp.content.decode(enc, errors="replace")
+        except Exception:
+            pass
+
+    # 3) Cùng lắm mới dùng requests .text (đã có fallback nội bộ)
+    try:
+        return resp.text
+    except Exception:
+        # 4) Chốt hạ: giải mã kiểu 'replace' để không vỡ flow
+        return resp.content.decode("utf-8", errors="replace")
 
 
 # --- CSV/Excel safe readers -------------------------------------------------
@@ -343,8 +413,29 @@ def extract_links_from_cell(val: Any, formula: Any) -> List[str]:
             seen.add(base)
     return out
 
+def repair_text(s: str) -> str:
+    return vn_strict_fix(s)
 
+def fold_vi(s: str) -> str:
+    """
+    Chuẩn hoá để tìm không dấu:
+    - Sửa mojibake (repair_text)
+    - Đổi đ/Đ -> d/D
+    - NFKD rồi bỏ dấu kết hợp
+    """
+    if not isinstance(s, str):
+        s = "" if s is None else str(s)
+    s = repair_text(s)
+    s = s.replace("đ", "d").replace("Đ", "D")
+    s = unicodedata.normalize("NFKD", s)
+    s = "".join(ch for ch in s if not unicodedata.combining(ch))
+    return s.lower()
 
+def normalize_query(q: str) -> Tuple[str, str]:
+    """Trả về (q_fixed, q_fold) = (đã sửa font, đã bỏ dấu)."""
+    q_fixed = repair_text(q or "")
+    q_fold = fold_vi(q_fixed)
+    return q_fixed, q_fold
 
 
 # =========================
@@ -357,7 +448,7 @@ def _resolve_creds_path(p: str) -> str:
             return cand
     return p
 
-def get_gspread_client() -> Optional["gspread.Client"]:
+def _gspread_client() -> Optional["gspread.Client"]:
     if not HAS_GSPREAD or Credentials is None:
         return None
     creds_path = _resolve_creds_path(GOOGLE_CREDS)
@@ -375,7 +466,7 @@ def get_gspread_client() -> Optional["gspread.Client"]:
         return None
 
 _SHEETS_SERVICE = None
-def get_sheets_service():
+def _sheets_service():
     global _SHEETS_SERVICE
     if _SHEETS_SERVICE:
         return _SHEETS_SERVICE
@@ -397,7 +488,7 @@ def get_sheets_service():
         return None
 
 _DRIVE_SERVICE = None
-def get_drive_service():
+def _drive_service():
     global _DRIVE_SERVICE
     if _DRIVE_SERVICE:
         return _DRIVE_SERVICE
@@ -415,12 +506,12 @@ def get_drive_service():
         _dlog(f"[drive] cannot build service: {e}")
         return None
 
-def get_drive_file_meta(file_id: str) -> Optional[dict]:
+def _drive_get_meta(file_id: str) -> Optional[dict]:
     if not file_id:
         return None
     if file_id in DRIVE_META_CACHE:
         return DRIVE_META_CACHE[file_id]
-    svc = get_drive_service()
+    svc = _drive_service()
     if not svc:
         return None
     try:
@@ -443,8 +534,8 @@ def get_drive_file_meta(file_id: str) -> Optional[dict]:
         _dlog(f"[drive] get meta failed {file_id}: {e}")
         return None
 
-def download_drive_file(file_id: str) -> Optional[bytes]:
-    svc = get_drive_service()
+def _drive_download_bytes(file_id: str) -> Optional[bytes]:
+    svc = _drive_service()
     if not svc:
         return None
     try:
@@ -575,7 +666,7 @@ def _xlsx_bytes_to_csvtext(data: bytes) -> Optional[str]:
         _dlog(f"[excel] parse xlsx failed: {e}")
         return None
 def _sheets_values_rows_by_gid(file_id: str, gid: Optional[str], max_rows: int = 5) -> Optional[Dict[str, List[List[str]]]]:
-    svc = get_sheets_service()
+    svc = _sheets_service()
     if not svc:
         return None
     try:
@@ -671,7 +762,7 @@ async def preview_tables_from_url(url: str, max_rows: int = 5) -> Dict[str, Any]
     except Exception:
         kind, file_id, maybe_gid = None, None, None
 
-    meta = get_drive_file_meta(file_id) if file_id else None
+    meta = _drive_get_meta(file_id) if file_id else None
     mime = (meta or {}).get("mimeType", "")
 
     # -----------------------------
@@ -684,7 +775,7 @@ async def preview_tables_from_url(url: str, max_rows: int = 5) -> Dict[str, Any]
             fixed_tables = []
             for sheet_name, rows in rows_map.items():
                 fixed_rows = [
-                    [fix_vietnamese_text(c) if c is not None else "" for c in (row or [])]
+                    [vn_strict_fix(c) if c is not None else "" for c in (row or [])]
                     for row in (rows or [])[:max_rows]
                 ]
                 fixed_tables.append({"name": sheet_name, "rows": fixed_rows})
@@ -702,10 +793,10 @@ async def preview_tables_from_url(url: str, max_rows: int = 5) -> Dict[str, Any]
             import requests
             resp = requests.get(export_url, timeout=20)
             resp.raise_for_status()
-            csv_text = decode_http_response(resp)       # decode utf-8/utf-8-sig chuẩn
+            csv_text = http_decode_bytes(resp)       # decode utf-8/utf-8-sig chuẩn
             rows = read_csv_text(csv_text)           # CSV → ma trận
             fixed_rows = [
-                [fix_vietnamese_text(c) if c is not None else "" for c in (row or [])]
+                [vn_strict_fix(c) if c is not None else "" for c in (row or [])]
                 for row in (rows or [])[:max_rows]
             ]
             return {
@@ -719,14 +810,14 @@ async def preview_tables_from_url(url: str, max_rows: int = 5) -> Dict[str, Any]
     # 3) EXCEL (.xlsx) UPLOAD TRÊN DRIVE
     # ---------------------------------------
     if mime in ("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",):
-        data = download_drive_file(file_id) if file_id else None
+        data = _drive_download_bytes(file_id) if file_id else None
         tables = []
         if data:
             try:
                 rows_map = _rows_from_xlsx_bytes(data, max_rows=max_rows) or {}
                 for sheet_name, rows in rows_map.items():
                     fixed_rows = [
-                        [fix_vietnamese_text(c) if c is not None else "" for c in (row or [])]
+                        [vn_strict_fix(c) if c is not None else "" for c in (row or [])]
                         for row in (rows or [])[:max_rows]
                     ]
                     tables.append({"name": sheet_name, "rows": fixed_rows})
@@ -740,7 +831,7 @@ async def preview_tables_from_url(url: str, max_rows: int = 5) -> Dict[str, Any]
     if mime in ("application/vnd.ms-excel",):
         try:
             import pandas as pd  # cần xlrd<=1.2.0 cho .xls
-            data = download_drive_file(file_id) if file_id else None
+            data = _drive_download_bytes(file_id) if file_id else None
             if data:
                 import io
                 with io.BytesIO(data) as f:
@@ -906,7 +997,7 @@ async def fetch_text_from_url(url: str) -> Optional[str]:
         return None
 
     # Nếu có file_id, sniff mime qua Drive (resolve shortcut)
-    meta = get_drive_file_meta(file_id) if file_id else None
+    meta = _drive_get_meta(file_id) if file_id else None
     if meta and meta.get("id") and file_id and meta["id"] != file_id:
         file_id = meta["id"]  # resolved target
     mime = (meta or {}).get("mimeType", "")
@@ -915,7 +1006,7 @@ async def fetch_text_from_url(url: str) -> Optional[str]:
     if mime == "application/vnd.google-apps.spreadsheet":
         # gspread trước (nếu không skip)
         if HAS_GSPREAD and (file_id not in GSPREAD_SKIP_IDS):
-            client = get_gspread_client()
+            client = _gspread_client()
             if client:
                 try:
                     ss = client.open_by_key(file_id)
@@ -929,7 +1020,7 @@ async def fetch_text_from_url(url: str) -> Optional[str]:
                         ws = ss.sheet1
                     if ws:
                         values = ws.get_all_values()
-                        return fix_vietnamese_text(_csv_to_text(values))
+                        return repair_text(_csv_to_text(values))
                 except Exception as e:
                     if "not supported for this document" in str(e).lower():
                         _mark_gspread_skip(file_id, "unsupported-or-noaccess")
@@ -938,18 +1029,18 @@ async def fetch_text_from_url(url: str) -> Optional[str]:
         # Sheets API values
         csv_text = _sheets_values_csv_by_gid(file_id, maybe_gid)
         if csv_text:
-            return fix_vietnamese_text(csv_text)
+            return repair_text(csv_text)
         _mark_url_private(url, "sheets_api_no_access")
         return None
 
     if mime == "application/vnd.google-apps.document":
         # Google Docs -> export TXT
-        svc = get_drive_service()
+        svc = _drive_service()
         if svc:
             try:
                 data = svc.files().export(fileId=file_id, mimeType="text/plain").execute()  # type: ignore
                 text = data.decode("utf-8", "ignore") if isinstance(data, bytes) else str(data)
-                return fix_vietnamese_text(text)
+                return repair_text(text)
             except Exception as e:
                 _dlog(f"[drive] export txt failed {file_id}: {e}")
         _mark_url_private(url, "drive_export_no_access")
@@ -966,11 +1057,11 @@ async def fetch_text_from_url(url: str) -> Optional[str]:
 
     if mime in ("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",):
         # Excel .xlsx uploaded to Drive
-        data = download_drive_file(file_id)
+        data = _drive_download_bytes(file_id)
         if data:
             text = _xlsx_bytes_to_csvtext(data)
             if text:
-                return fix_vietnamese_text(text)
+                return repair_text(text)
         _mark_url_private(url, "excel_download_or_parse_failed")
         return None
 
@@ -978,13 +1069,13 @@ async def fetch_text_from_url(url: str) -> Optional[str]:
     for cand in export_candidates(url):
         text = await _http_get_text(cand)
         if text:
-            return fix_vietnamese_text(text)
+            return repair_text(text)
 
     # Cuối cùng: HTML thường
     if kind == "unknown":
         text = await _http_get_text(url)
         if text:
-            return fix_vietnamese_text(text)
+            return repair_text(text)
 
     _mark_url_private(url, "final_no_access_or_unknown_mime")
     return None
@@ -1108,11 +1199,11 @@ def _peek_url_rows(u: str, nrows: int = 10, gid: str | None = None) -> list[list
             import requests
             resp = requests.get(export_url, timeout=25)
             resp.raise_for_status()
-            csv_text = decode_http_response(resp)
+            csv_text = http_decode_bytes(resp)
             rows = read_csv_text(csv_text)
             out = []
             for row in rows[:nrows]:
-                out.append([fix_vietnamese_text("" if c is None else str(c)) for c in (row or [])])
+                out.append([vn_strict_fix("" if c is None else str(c)) for c in (row or [])])
             return out
 
         # CSV public
@@ -1120,11 +1211,11 @@ def _peek_url_rows(u: str, nrows: int = 10, gid: str | None = None) -> list[list
             import requests
             resp = requests.get(u, timeout=25)
             resp.raise_for_status()
-            csv_text = decode_http_response(resp)
+            csv_text = http_decode_bytes(resp)
             rows = read_csv_text(csv_text)
             out = []
             for row in rows[:nrows]:
-                out.append([fix_vietnamese_text("" if c is None else str(c)) for c in (row or [])])
+                out.append([vn_strict_fix("" if c is None else str(c)) for c in (row or [])])
             return out
     except Exception as e:
         _dlog(f"[peek] failed {u}: {e}")
@@ -1148,7 +1239,7 @@ def index_sources(verbose: bool = False, deep: bool = False) -> Tuple[List[Dict[
         _dlog("[index] gspread not available → cannot open spreadsheet; empty index.")
         return rows, sheets
 
-    client = get_gspread_client()
+    client = _gspread_client()
     if not client:
         _dlog("[index] cannot get gspread client")
         return rows, sheets
@@ -1172,7 +1263,7 @@ def index_sources(verbose: bool = False, deep: bool = False) -> Tuple[List[Dict[
     # deep rich-text links
     deep_map: Dict[str, List[Dict[str, Any]]] = {}
     if deep:
-        svc = get_sheets_service()
+        svc = _sheets_service()
         if svc:
             _dlog("[deep] ENABLED: scanning rich-text links via Sheets API…")
             deep_map = deep_scan_all_sheets(svc, DEFAULT_SPREADSHEET_ID) or {}
@@ -1387,8 +1478,8 @@ def search_rows(query: str, top_k: int = 20, fuzz_threshold: int = 85, exact: bo
     
     for row in DATABASE_ROWS:
         raw = row.get("text") or ""
-        text_fixed = fix_vietnamese_text(raw)
-        text_fold  = fold_vietnamese(text_fixed)
+        text_fixed = repair_text(raw)
+        text_fold  = fold_vi(text_fixed)
         if exact:
             ok = _all_tokens_in_text(q_fold, text_fold)
             score = 100 if ok else 0
@@ -1415,14 +1506,14 @@ def search_rows(query: str, top_k: int = 20, fuzz_threshold: int = 85, exact: bo
 
 
 def _tokens_fold(q: str) -> list[str]:
-    return [t for t in re.split(r"\s+", fold_vietnamese(q)) if t]
+    return [t for t in re.split(r"\s+", fold_vi(q)) if t]
 
 def _all_tokens_word_boundary(text_fold: str, toks: list[str]) -> bool:
     return all(re.search(rf"\b{re.escape(tok)}\b", text_fold) for tok in toks)
 
 def _match_score(q_raw: str, s_raw: str, exact: bool, fuzz_threshold: int) -> int:
-    q_fix, s_fix = fix_vietnamese_text(q_raw), fix_vietnamese_text(s_raw)
-    q_fold, s_fold = fold_vietnamese(q_fix), fold_vietnamese(s_fix)
+    q_fix, s_fix = vn_strict_fix(q_raw), vn_strict_fix(s_raw)
+    q_fold, s_fold = fold_vi(q_fix), fold_vi(s_fix)
     if exact:
         return 100 if _all_tokens_word_boundary(s_fold, _tokens_fold(q_fix)) else 0
     return max(
@@ -1431,8 +1522,8 @@ def _match_score(q_raw: str, s_raw: str, exact: bool, fuzz_threshold: int) -> in
     )
 
 def _snippet(s: str, q: str, window: int = 60) -> str:
-    s_fix, q_fix = fix_vietnamese_text(s), fix_vietnamese_text(q)
-    s_fold, q_fold = fold_vietnamese(s_fix), fold_vietnamese(q_fix)
+    s_fix, q_fix = vn_strict_fix(s), vn_strict_fix(q)
+    s_fold, q_fold = fold_vi(s_fix), fold_vi(q_fix)
     m = re.search(re.escape(q_fold), s_fold, flags=re.IGNORECASE)
     if not m:
         # fallback: lấy đầu dòng
@@ -1469,7 +1560,7 @@ def _search_in_one_url_core(u: str, q: str, *, gid: str | None = None,
                 "row": idx,
                 "score": score,
                 "snippet": _snippet(line, q),
-                "values": [fix_vietnamese_text("" if c is None else str(c)) for c in row],
+                "values": [vn_strict_fix("" if c is None else str(c)) for c in row],
             })
     return hits
 
@@ -1498,7 +1589,7 @@ async def search_url(
         import requests
         resp = requests.get(export_url, timeout=25)
         resp.raise_for_status()
-        csv_text = decode_http_response(resp)
+        csv_text = http_decode_bytes(resp)
         rows = read_csv_text(csv_text)
 
         for idx, row in enumerate(rows[:max_rows], start=1):
@@ -1509,7 +1600,7 @@ async def search_url(
                     "row": idx,
                     "score": score,
                     "snippet": _snippet(line, q),
-                    "values": [fix_vietnamese_text("" if c is None else str(c)) for c in row],
+                    "values": [vn_strict_fix("" if c is None else str(c)) for c in row],
                 })
 
         return {"url": u, "kind": "sheets", "gid": gid, "query": q, "hits": hits}
@@ -1519,7 +1610,7 @@ async def search_url(
         import requests
         resp = requests.get(u, timeout=25)
         resp.raise_for_status()
-        csv_text = decode_http_response(resp)
+        csv_text = http_decode_bytes(resp)
         rows = read_csv_text(csv_text)
         for idx, row in enumerate(rows[:max_rows], start=1):
             line = " | ".join("" if c is None else str(c) for c in row)
@@ -1529,7 +1620,7 @@ async def search_url(
                     "row": idx,
                     "score": score,
                     "snippet": _snippet(line, q),
-                    "values": [fix_vietnamese_text("" if c is None else str(c)) for c in row],
+                    "values": [vn_strict_fix("" if c is None else str(c)) for c in row],
                 })
         return {"url": u, "kind": "csv", "query": q, "hits": hits}
 
@@ -2067,13 +2158,13 @@ def mysql_sync_ctv_data(clear_first: bool = False):
                 continue
             
             # Chuẩn hóa text cho search
-            text_fixed = fix_vietnamese_text(text)
-            text_normalized = fold_vietnamese(text_fixed)
+            text_fixed = repair_text(text)
+            text_normalized = fold_vi(text_fixed)
             
             # Sử dụng unit làm "full_name" cho search (tên đơn vị)
             # Và category làm "mssv" (mảng hoạt động)
             full_name = unit if unit else category
-            name_normalized = fold_vietnamese(full_name) if full_name else ""
+            name_normalized = fold_vi(full_name) if full_name else ""
             
             ctv_records.append({
                 "sheet": sheet,
@@ -2261,7 +2352,7 @@ async def mysql_sync_content(
             return {"ok": False, "error": "Failed to fetch content", "url": url}
         
         # Parse content
-        normalized = fix_vietnamese_text(text)
+        normalized = repair_text(text)
         
         # Nếu là CSV/Sheets, parse thành rows
         rows_data = []
@@ -2278,7 +2369,7 @@ async def mysql_sync_content(
                         "row_number": idx,
                         "values": row,
                         "text": row_text,
-                        "normalized": fold_vietnamese(row_text),
+                        "normalized": fold_vi(row_text),
                     })
         except Exception as e:
             _dlog(f"[mysql] Failed to parse CSV: {e}")
@@ -2337,7 +2428,7 @@ async def mysql_sync_all_content(limit: int = 50):
                 
                 if text:
                     # Parse and insert
-                    normalized = fix_vietnamese_text(text)
+                    normalized = repair_text(text)
                     row_count = 0
                     
                     try:
@@ -2352,7 +2443,7 @@ async def mysql_sync_all_content(limit: int = 50):
                                     "row_number": idx,
                                     "values": row,
                                     "text": row_text,
-                                    "normalized": fold_vietnamese(row_text),
+                                    "normalized": fold_vi(row_text),
                                 })
                             
                             if rows_data:

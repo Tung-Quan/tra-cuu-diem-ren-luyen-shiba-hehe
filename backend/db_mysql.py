@@ -1,7 +1,6 @@
-# db_mysql.py — MySQL connection and operations for CTV system
+# db_mysql.py — Simplified MySQL for CTV Links Query System
 import os
 import json
-import time
 from typing import Any, Dict, List, Optional, Tuple
 from contextlib import contextmanager
 
@@ -25,34 +24,24 @@ MYSQL_CONFIG = {
     "charset": "utf8mb4",
     "collation": "utf8mb4_unicode_ci",
     "autocommit": False,
+    "database": os.environ.get("MYSQL_DATABASE", "ctv_links"),
 }
 
-LINKS_DB = "ctv_links_db"
-CONTENT_DB = "ctv_content_db"
+DB_NAME = "ctv_links"
 
 
 # =========================
 # Connection Management
 # =========================
 @contextmanager
-def get_db_connection(database: Optional[str] = None):
-    """
-    Context manager để tạo MySQL connection.
-    Usage:
-        with get_db_connection(LINKS_DB) as conn:
-            cursor = conn.cursor()
-            cursor.execute("SELECT ...")
-    """
+def get_db_connection():
+    """Context manager để tạo MySQL connection."""
     if not HAS_MYSQL:
-        raise ImportError("mysql-connector-python not installed. Run: pip install mysql-connector-python")
-    
-    config = MYSQL_CONFIG.copy()
-    if database:
-        config["database"] = database
+        raise ImportError("mysql-connector-python not installed")
     
     conn = None
     try:
-        conn = mysql.connector.connect(**config)
+        conn = mysql.connector.connect(**MYSQL_CONFIG)
         yield conn
     except MySQLError as e:
         if conn:
@@ -64,513 +53,458 @@ def get_db_connection(database: Optional[str] = None):
 
 
 def test_connection() -> Dict[str, Any]:
-    """Test MySQL connection and return server info."""
+    """Test MySQL connection."""
     try:
-        with get_db_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute("SELECT VERSION(), NOW()")
-            version, now = cursor.fetchone()
-            cursor.close()
-            return {
-                "ok": True,
-                "version": version,
-                "server_time": str(now),
-                "config": {k: v for k, v in MYSQL_CONFIG.items() if k != "password"}
-            }
+        # Connect without specifying database first
+        config = MYSQL_CONFIG.copy()
+        config.pop("database", None)
+        
+        conn = mysql.connector.connect(**config)
+        cursor = conn.cursor()
+        cursor.execute("SELECT VERSION()")
+        version = cursor.fetchone()[0]
+        cursor.close()
+        conn.close()
+        
+        return {
+            "ok": True,
+            "version": version,
+            "database": None,
+            "config": {k: v for k, v in MYSQL_CONFIG.items() if k != "password"}
+        }
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
 
 # =========================
-# Links Database Operations
+# Core Query Functions: Query → MSSV/Name → Links
 # =========================
-def insert_links_batch(links: List[Dict[str, Any]]) -> Tuple[int, int]:
+
+def search_student_links(query: str, limit: int = 50) -> List[Dict[str, Any]]:
     """
-    Insert hoặc update batch links vào ctv_links_db.links.
-    Returns: (inserted_count, updated_count)
-    """
-    if not links:
-        return 0, 0
+    Core function: Query tên hoặc MSSV sinh viên, trả về links.
     
-    with get_db_connection(LINKS_DB) as conn:
-        cursor = conn.cursor()
-        
-        # Sử dụng INSERT ... ON DUPLICATE KEY UPDATE
-        # (Tuy nhiên table links không có UNIQUE constraint trên url, nên sẽ luôn insert mới)
-        # Để tránh duplicate, ta có thể check trước hoặc thêm UNIQUE index
-        
-        sql = """
-            INSERT INTO links 
-            (url, sheet_name, row_number, col_number, address, gid, target_sheet_name)
-            VALUES (%s, %s, %s, %s, %s, %s, %s)
-        """
-        
-        values = []
-        for link in links:
-            values.append((
-                link.get("url", "")[:2048],
-                link.get("sheet", "")[:255],
-                link.get("row") or None,
-                link.get("col") or None,
-                link.get("address", "")[:20],
-                link.get("gid", "")[:100] if link.get("gid") else None,
-                link.get("sheet_name", "")[:255],
-            ))
-        
-        cursor.executemany(sql, values)
-        conn.commit()
-        inserted = cursor.rowcount
-        cursor.close()
-        
-        return inserted, 0  # Chưa implement update logic
-
-
-def clear_links_table() -> int:
-    """Xóa toàn bộ dữ liệu trong bảng links. Returns: deleted count."""
-    with get_db_connection(LINKS_DB) as conn:
-        cursor = conn.cursor()
-        cursor.execute("DELETE FROM links")
-        conn.commit()
-        deleted = cursor.rowcount
-        cursor.close()
-        return deleted
-
-
-def get_links_count() -> int:
-    """Đếm số lượng links trong database."""
-    with get_db_connection(LINKS_DB) as conn:
-        cursor = conn.cursor()
-        cursor.execute("SELECT COUNT(*) FROM links")
-        count = cursor.fetchone()[0]
-        cursor.close()
-        return count
-
-
-def get_link_summary_by_sheet() -> List[Dict[str, Any]]:
-    """Lấy thống kê links theo sheet."""
-    with get_db_connection(LINKS_DB) as conn:
-        cursor = conn.cursor(dictionary=True)
-        cursor.execute("SELECT * FROM link_summary_by_sheet")
-        rows = cursor.fetchall()
-        cursor.close()
-        return rows
-
-
-# =========================
-# CTV Data Operations (DATABASE_ROWS)
-# =========================
-def insert_ctv_data_batch(ctv_records: List[Dict[str, Any]]) -> int:
-    """
-    Insert batch CTV data records vào ctv_links_db.ctv_data.
-    ctv_records: [{
-        "sheet": str, "row": int, "full_name": str, "mssv": str,
-        "unit": str, "program": str, "row_text": str, "links": [...]
+    Returns: [{
+        "student_id": int,
+        "full_name": str,
+        "mssv": str,
+        "links": [{"url": str, "sheet": str, "row": int, "address": str}, ...]
     }]
-    Returns: inserted count
     """
-    if not ctv_records:
-        return 0
-    
-    with get_db_connection(LINKS_DB) as conn:
-        cursor = conn.cursor()
-        
-        sql = """
-            INSERT INTO ctv_data 
-            (sheet_name, row_number, full_name, full_name_normalized, mssv, 
-             unit, program, row_text, row_text_normalized, links)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-        """
-        
-        values = []
-        for rec in ctv_records:
-            values.append((
-                rec.get("sheet", "")[:255],
-                rec.get("row", 0),
-                rec.get("full_name", "")[:255],
-                rec.get("full_name_normalized", "")[:255],
-                rec.get("mssv", "")[:50],
-                rec.get("unit", "")[:255],
-                rec.get("program", "")[:500],
-                rec.get("row_text", ""),
-                rec.get("row_text_normalized", ""),
-                json.dumps(rec.get("links", []), ensure_ascii=False),
-            ))
-        
-        cursor.executemany(sql, values)
-        conn.commit()
-        inserted = cursor.rowcount
-        cursor.close()
-        
-        return inserted
-
-
-def clear_ctv_data_table() -> int:
-    """Xóa toàn bộ dữ liệu trong bảng ctv_data."""
-    with get_db_connection(LINKS_DB) as conn:
-        cursor = conn.cursor()
-        cursor.execute("DELETE FROM ctv_data")
-        conn.commit()
-        deleted = cursor.rowcount
-        cursor.close()
-        return deleted
-
-
-def get_ctv_data_count() -> int:
-    """Đếm số records trong ctv_data."""
-    with get_db_connection(LINKS_DB) as conn:
-        cursor = conn.cursor()
-        cursor.execute("SELECT COUNT(*) FROM ctv_data")
-        count = cursor.fetchone()[0]
-        cursor.close()
-        return count
-
-
-def search_ctv_by_name(name: str, limit: int = 50) -> List[Dict[str, Any]]:
-    """
-    Tìm CTV theo tên (có dấu hoặc không dấu).
-    Returns: list of matching records
-    """
-    with get_db_connection(LINKS_DB) as conn:
+    with get_db_connection() as conn:
         cursor = conn.cursor(dictionary=True)
         
-        # Thử full-text search trước (có dấu)
-        sql_fulltext = """
-            SELECT id, sheet_name, row_number, full_name, mssv, unit, program,
-                   MATCH(full_name) AGAINST(%s IN NATURAL LANGUAGE MODE) as score
-            FROM ctv_data
-            WHERE MATCH(full_name) AGAINST(%s IN NATURAL LANGUAGE MODE)
-            ORDER BY score DESC
+        # Search by MSSV (exact hoặc partial)
+        sql = """
+            SELECT 
+                s.student_id,
+                s.full_name,
+                s.mssv,
+                l.url,
+                sl.sheet_name,
+                sl.row_number,
+                sl.address
+            FROM student s
+            LEFT JOIN student_link sl ON s.student_id = sl.student_id
+            LEFT JOIN link l ON sl.link_id = l.link_id
+            WHERE s.mssv LIKE %s 
+               OR s.full_name LIKE %s
+               OR s.search_name LIKE %s
+            ORDER BY s.student_id, sl.sheet_name, sl.row_number
             LIMIT %s
         """
         
-        cursor.execute(sql_fulltext, (name, name, limit))
+        pattern = f"%{query}%"
+        cursor.execute(sql, (pattern, pattern, pattern, limit * 10))
         rows = cursor.fetchall()
+        cursor.close()
         
-        # Nếu không có kết quả, thử search không dấu
+        # Group by student
+        students_dict = {}
+        for row in rows:
+            sid = row["student_id"]
+            if sid not in students_dict:
+                students_dict[sid] = {
+                    "student_id": sid,
+                    "full_name": row["full_name"],
+                    "mssv": row["mssv"],
+                    "links": []
+                }
+            
+            if row["url"]:  # Only add if link exists
+                students_dict[sid]["links"].append({
+                    "url": row["url"],
+                    "sheet": row["sheet_name"],
+                    "row": row["row_number"],
+                    "address": row["address"]
+                })
+        
+        return list(students_dict.values())[:limit]
+
+
+def quick_search(query: str, limit: int = 20) -> List[Dict[str, Any]]:
+    """
+    Quick search - chỉ trả về student info + count links.
+    Nhanh hơn search_student_links() vì không JOIN link details.
+    """
+    with get_db_connection() as conn:
+        cursor = conn.cursor(dictionary=True)
+        
+        sql = """
+            SELECT 
+                s.student_id,
+                s.full_name,
+                s.mssv,
+                COUNT(sl.link_id) as link_count
+            FROM student s
+            LEFT JOIN student_link sl ON s.student_id = sl.student_id
+            WHERE s.mssv LIKE %s 
+               OR s.full_name LIKE %s
+               OR s.search_name LIKE %s
+            GROUP BY s.student_id, s.full_name, s.mssv
+            ORDER BY link_count DESC, s.full_name
+            LIMIT %s
+        """
+        
+        pattern = f"%{query}%"
+        cursor.execute(sql, (pattern, pattern, pattern, limit))
+        rows = cursor.fetchall()
+        cursor.close()
+        
+        return rows
+
+
+def get_student_links_by_mssv(mssv: str) -> Optional[Dict[str, Any]]:
+    """Lấy tất cả links của 1 sinh viên theo MSSV (exact match)."""
+    with get_db_connection() as conn:
+        cursor = conn.cursor(dictionary=True)
+        
+        sql = """
+            SELECT 
+                s.student_id,
+                s.full_name,
+                s.mssv,
+                l.url,
+                l.title,
+                l.kind,
+                sl.sheet_name,
+                sl.row_number,
+                sl.address,
+                sl.snippet
+            FROM student s
+            LEFT JOIN student_link sl ON s.student_id = sl.student_id
+            LEFT JOIN link l ON sl.link_id = l.link_id
+            WHERE s.mssv = %s
+            ORDER BY sl.sheet_name, sl.row_number
+        """
+        
+        cursor.execute(sql, (mssv,))
+        rows = cursor.fetchall()
+        cursor.close()
+        
         if not rows:
-            sql_normalized = """
-                SELECT id, sheet_name, row_number, full_name, mssv, unit, program,
-                       MATCH(full_name_normalized) AGAINST(%s IN NATURAL LANGUAGE MODE) as score
-                FROM ctv_data
-                WHERE MATCH(full_name_normalized) AGAINST(%s IN NATURAL LANGUAGE MODE)
-                ORDER BY score DESC
-                LIMIT %s
-            """
-            cursor.execute(sql_normalized, (name, name, limit))
-            rows = cursor.fetchall()
+            return None
         
-        # Nếu vẫn không có, thử LIKE
-        if not rows:
-            sql_like = """
-                SELECT id, sheet_name, row_number, full_name, mssv, unit, program, 0 as score
-                FROM ctv_data
-                WHERE full_name LIKE %s OR full_name_normalized LIKE %s
-                LIMIT %s
-            """
-            pattern = f"%{name}%"
-            cursor.execute(sql_like, (pattern, pattern, limit))
-            rows = cursor.fetchall()
+        result = {
+            "student_id": rows[0]["student_id"],
+            "full_name": rows[0]["full_name"],
+            "mssv": rows[0]["mssv"],
+            "links": []
+        }
         
-        cursor.close()
-        return rows
-
-
-def search_ctv_by_mssv(mssv: str, limit: int = 50) -> List[Dict[str, Any]]:
-    """Tìm CTV theo MSSV (exact hoặc partial match)."""
-    with get_db_connection(LINKS_DB) as conn:
-        cursor = conn.cursor(dictionary=True)
+        for row in rows:
+            if row["url"]:
+                result["links"].append({
+                    "url": row["url"],
+                    "title": row["title"],
+                    "kind": row["kind"],
+                    "sheet": row["sheet_name"],
+                    "row": row["row_number"],
+                    "address": row["address"],
+                    "snippet": row["snippet"]
+                })
         
-        # Exact match first
-        sql = """
-            SELECT id, sheet_name, row_number, full_name, mssv, unit, program
-            FROM ctv_data
-            WHERE mssv = %s OR mssv LIKE %s
-            LIMIT %s
-        """
-        
-        cursor.execute(sql, (mssv, f"%{mssv}%", limit))
-        rows = cursor.fetchall()
-        cursor.close()
-        return rows
-
-
-def search_ctv_fulltext(query: str, limit: int = 50) -> List[Dict[str, Any]]:
-    """
-    Full-text search toàn bộ text của CTV record (tên, đơn vị, chương trình).
-    """
-    with get_db_connection(LINKS_DB) as conn:
-        cursor = conn.cursor(dictionary=True)
-        
-        sql = """
-            SELECT id, sheet_name, row_number, full_name, mssv, unit, program,
-                   MATCH(row_text) AGAINST(%s IN NATURAL LANGUAGE MODE) as score
-            FROM ctv_data
-            WHERE MATCH(row_text) AGAINST(%s IN NATURAL LANGUAGE MODE)
-            ORDER BY score DESC
-            LIMIT %s
-        """
-        
-        cursor.execute(sql, (query, query, limit))
-        rows = cursor.fetchall()
-        
-        # Fallback: search không dấu
-        if not rows:
-            sql_normalized = """
-                SELECT id, sheet_name, row_number, full_name, mssv, unit, program,
-                       MATCH(row_text_normalized) AGAINST(%s IN NATURAL LANGUAGE MODE) as score
-                FROM ctv_data
-                WHERE MATCH(row_text_normalized) AGAINST(%s IN NATURAL LANGUAGE MODE)
-                ORDER BY score DESC
-                LIMIT %s
-            """
-            cursor.execute(sql_normalized, (query, query, limit))
-            rows = cursor.fetchall()
-        
-        cursor.close()
-        return rows
-
-
-def get_ctv_by_sheet(sheet_name: str, limit: int = 100) -> List[Dict[str, Any]]:
-    """Lấy tất cả CTV trong một sheet."""
-    with get_db_connection(LINKS_DB) as conn:
-        cursor = conn.cursor(dictionary=True)
-        
-        sql = """
-            SELECT id, sheet_name, row_number, full_name, mssv, unit, program
-            FROM ctv_data
-            WHERE sheet_name = %s
-            ORDER BY row_number
-            LIMIT %s
-        """
-        
-        cursor.execute(sql, (sheet_name, limit))
-        rows = cursor.fetchall()
-        cursor.close()
-        return rows
+        return result
 
 
 # =========================
-# Content Database Operations
+# Insert/Update Functions
 # =========================
-def upsert_fetched_content(
-    url: str,
-    raw_content: Optional[str],
-    normalized_content: Optional[str],
-    content_type: str = "text/csv",
-    gid: Optional[str] = None,
-    row_count: int = 0,
-    status: str = "ok",
-    error_message: Optional[str] = None,
-) -> int:
-    """
-    Insert hoặc update nội dung đã fetch.
-    Returns: affected row count
-    """
-    with get_db_connection(CONTENT_DB) as conn:
+
+def insert_student(full_name: str, mssv: Optional[str] = None) -> int:
+    """Insert student, returns student_id."""
+    with get_db_connection() as conn:
         cursor = conn.cursor()
         
         sql = """
-            INSERT INTO fetched_content 
-            (url, gid, content_type, raw_content, normalized_content, row_count, status, error_message)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            INSERT INTO student (full_name, mssv)
+            VALUES (%s, %s)
+            ON DUPLICATE KEY UPDATE 
+                mssv = VALUES(mssv),
+                student_id = LAST_INSERT_ID(student_id)
+        """
+        
+        cursor.execute(sql, (full_name, mssv))
+        conn.commit()
+        student_id = cursor.lastrowid
+        cursor.close()
+        
+        return student_id
+
+
+def insert_link(url: str, title: Optional[str] = None, kind: Optional[str] = None, 
+                gid: Optional[str] = None) -> int:
+    """Insert link, returns link_id."""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        
+        sql = """
+            INSERT INTO link (url, title, kind, gid)
+            VALUES (%s, %s, %s, %s)
             ON DUPLICATE KEY UPDATE
-                gid = VALUES(gid),
-                content_type = VALUES(content_type),
-                raw_content = VALUES(raw_content),
-                normalized_content = VALUES(normalized_content),
-                row_count = VALUES(row_count),
-                status = VALUES(status),
-                error_message = VALUES(error_message),
-                updated_at = CURRENT_TIMESTAMP
+                title = COALESCE(VALUES(title), title),
+                kind = COALESCE(VALUES(kind), kind),
+                gid = COALESCE(VALUES(gid), gid),
+                link_id = LAST_INSERT_ID(link_id)
         """
         
-        cursor.execute(sql, (
-            url[:2048],
-            gid[:100] if gid else None,
-            content_type[:100],
-            raw_content,
-            normalized_content,
-            row_count,
-            status[:50],
-            error_message,
-        ))
+        cursor.execute(sql, (url, title, kind, gid))
+        conn.commit()
+        link_id = cursor.lastrowid
+        cursor.close()
+        
+        return link_id
+
+
+def link_student_to_url(
+    student_id: int,
+    link_id: int,
+    sheet_name: Optional[str] = None,
+    row_number: Optional[int] = None,
+    address: Optional[str] = None,
+    snippet: Optional[str] = None
+) -> bool:
+    """Tạo mối liên kết student <-> link."""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        
+        sql = """
+            INSERT INTO student_link 
+            (student_id, link_id, sheet_name, row_number, address, snippet)
+            VALUES (%s, %s, %s, %s, %s, %s)
+            ON DUPLICATE KEY UPDATE
+                sheet_name = VALUES(sheet_name),
+                address = VALUES(address),
+                snippet = VALUES(snippet)
+        """
+        
+        cursor.execute(sql, (student_id, link_id, sheet_name, row_number, address, snippet))
         conn.commit()
         affected = cursor.rowcount
         cursor.close()
-        return affected
-
-
-def insert_parsed_rows_batch(url: str, rows_data: List[Dict[str, Any]]) -> int:
-    """
-    Insert batch parsed rows vào bảng parsed_rows.
-    rows_data: [{"row_number": 1, "values": [...], "text": "...", "normalized": "..."}, ...]
-    Returns: inserted count
-    """
-    if not rows_data:
-        return 0
-    
-    with get_db_connection(CONTENT_DB) as conn:
-        cursor = conn.cursor()
         
-        sql = """
-            INSERT INTO parsed_rows 
-            (url, row_number, row_data, row_text, normalized_text)
-            VALUES (%s, %s, %s, %s, %s)
-        """
-        
-        values = []
-        for row_info in rows_data:
-            values.append((
-                url[:2048],
-                row_info.get("row_number", 0),
-                json.dumps(row_info.get("values", []), ensure_ascii=False),
-                row_info.get("text", ""),
-                row_info.get("normalized", ""),
-            ))
-        
-        cursor.executemany(sql, values)
-        conn.commit()
-        inserted = cursor.rowcount
-        cursor.close()
-        return inserted
-
-
-def clear_content_tables() -> Tuple[int, int]:
-    """Xóa toàn bộ dữ liệu content. Returns: (fetched_deleted, rows_deleted)."""
-    with get_db_connection(CONTENT_DB) as conn:
-        cursor = conn.cursor()
-        
-        cursor.execute("DELETE FROM parsed_rows")
-        rows_deleted = cursor.rowcount
-        
-        cursor.execute("DELETE FROM fetched_content")
-        fetched_deleted = cursor.rowcount
-        
-        conn.commit()
-        cursor.close()
-        
-        return fetched_deleted, rows_deleted
-
-
-def get_content_summary() -> List[Dict[str, Any]]:
-    """Lấy thống kê content đã fetch."""
-    with get_db_connection(CONTENT_DB) as conn:
-        cursor = conn.cursor(dictionary=True)
-        cursor.execute("SELECT * FROM content_summary")
-        rows = cursor.fetchall()
-        cursor.close()
-        return rows
-
-
-def search_in_parsed_rows(query: str, limit: int = 50) -> List[Dict[str, Any]]:
-    """
-    Full-text search trong bảng parsed_rows.
-    Returns: list of matching rows với url, row_number, row_text
-    """
-    with get_db_connection(CONTENT_DB) as conn:
-        cursor = conn.cursor(dictionary=True)
-        
-        # Thử search có dấu trước
-        sql_with_diacritic = """
-            SELECT url, row_number, row_text, 
-                   MATCH(row_text) AGAINST(%s IN NATURAL LANGUAGE MODE) as score
-            FROM parsed_rows
-            WHERE MATCH(row_text) AGAINST(%s IN NATURAL LANGUAGE MODE)
-            ORDER BY score DESC
-            LIMIT %s
-        """
-        
-        cursor.execute(sql_with_diacritic, (query, query, limit))
-        rows = cursor.fetchall()
-        
-        # Nếu không có kết quả, thử search không dấu
-        if not rows:
-            sql_normalized = """
-                SELECT url, row_number, row_text,
-                       MATCH(normalized_text) AGAINST(%s IN NATURAL LANGUAGE MODE) as score
-                FROM parsed_rows
-                WHERE MATCH(normalized_text) AGAINST(%s IN NATURAL LANGUAGE MODE)
-                ORDER BY score DESC
-                LIMIT %s
-            """
-            cursor.execute(sql_normalized, (query, query, limit))
-            rows = cursor.fetchall()
-        
-        cursor.close()
-        return rows
-
-
-def log_search_query(query: str, normalized_query: str, result_count: int, execution_time_ms: int) -> int:
-    """Ghi log search query vào database."""
-    with get_db_connection(CONTENT_DB) as conn:
-        cursor = conn.cursor()
-        
-        sql = """
-            INSERT INTO search_queries 
-            (query, normalized_query, result_count, execution_time_ms)
-            VALUES (%s, %s, %s, %s)
-        """
-        
-        cursor.execute(sql, (query, normalized_query, result_count, execution_time_ms))
-        conn.commit()
-        inserted_id = cursor.lastrowid
-        cursor.close()
-        return inserted_id
+        return affected > 0
 
 
 # =========================
-# Utility Functions
+# Batch Operations
 # =========================
-def init_databases() -> Dict[str, Any]:
+
+def batch_insert_student_links(records: List[Dict[str, Any]]) -> int:
     """
-    Tạo databases và tables nếu chưa có.
-    Yêu cầu file schema.sql nằm cùng thư mục.
+    Batch insert student-link records.
+    
+    records: [{
+        "full_name": str,
+        "mssv": str,
+        "url": str,
+        "sheet": str,
+        "row": int,
+        "address": str,
+        "snippet": str
+    }]
+    
+    Returns: số records đã insert
     """
-    import subprocess
-    import os
+    inserted = 0
     
-    schema_file = os.path.join(os.path.dirname(__file__), "schema.sql")
-    if not os.path.exists(schema_file):
-        return {"ok": False, "error": "schema.sql not found"}
+    for rec in records:
+        try:
+            # Insert student
+            student_id = insert_student(rec.get("full_name", ""), rec.get("mssv"))
+            
+            # Insert link
+            link_id = insert_link(rec.get("url", ""))
+            
+            # Link them
+            if link_student_to_url(
+                student_id, link_id,
+                rec.get("sheet"),
+                rec.get("row"),
+                rec.get("address"),
+                rec.get("snippet")
+            ):
+                inserted += 1
+                
+        except Exception as e:
+            print(f"[batch_insert] Error: {e}")
+            continue
     
+    return inserted
+
+
+# =========================
+# Statistics
+# =========================
+
+def get_stats() -> Dict[str, Any]:
+    """Lấy thống kê tổng quan."""
+    with get_db_connection() as conn:
+        cursor = conn.cursor(dictionary=True)
+        
+        stats = {}
+        
+        # Student count
+        cursor.execute("SELECT COUNT(*) as count FROM student")
+        stats["students"] = cursor.fetchone()["count"]
+        
+        # Link count
+        cursor.execute("SELECT COUNT(*) as count FROM link")
+        stats["links"] = cursor.fetchone()["count"]
+        
+        # Student-Link connections
+        cursor.execute("SELECT COUNT(*) as count FROM student_link")
+        stats["connections"] = cursor.fetchone()["count"]
+        
+        # Students with links
+        cursor.execute("""
+            SELECT COUNT(DISTINCT student_id) as count 
+            FROM student_link
+        """)
+        stats["students_with_links"] = cursor.fetchone()["count"]
+        
+        # Top students by link count
+        cursor.execute("""
+            SELECT s.full_name, s.mssv, COUNT(*) as link_count
+            FROM student s
+            JOIN student_link sl ON s.student_id = sl.student_id
+            GROUP BY s.student_id, s.full_name, s.mssv
+            ORDER BY link_count DESC
+            LIMIT 10
+        """)
+        stats["top_students"] = cursor.fetchall()
+        
+        cursor.close()
+        return stats
+
+
+# =========================
+# Schema Init
+# =========================
+
+def init_schema() -> Dict[str, Any]:
+    """Tạo schema nếu chưa có."""
     try:
-        # Chạy schema.sql bằng mysql command line
-        cmd = [
-            "mysql",
-            f"-h{MYSQL_CONFIG['host']}",
-            f"-P{MYSQL_CONFIG['port']}",
-            f"-u{MYSQL_CONFIG['user']}",
-        ]
-        if MYSQL_CONFIG.get("password"):
-            cmd.append(f"-p{MYSQL_CONFIG['password']}")
+        # Connect without database first
+        config = MYSQL_CONFIG.copy()
+        config.pop("database", None)
         
-        with open(schema_file, "r", encoding="utf-8") as f:
-            result = subprocess.run(
-                cmd,
-                stdin=f,
-                capture_output=True,
-                text=True,
-            )
+        conn = mysql.connector.connect(**config)
+        cursor = conn.cursor()
         
-        if result.returncode != 0:
-            return {"ok": False, "error": result.stderr}
+        # Create database if not exists
+        cursor.execute(f"CREATE DATABASE IF NOT EXISTS {DB_NAME} CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci")
+        cursor.execute(f"USE {DB_NAME}")
         
-        return {"ok": True, "message": "Databases and tables created successfully"}
-    
+        # Student table
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS student (
+                student_id BIGINT PRIMARY KEY AUTO_INCREMENT,
+                full_name VARCHAR(255) NOT NULL,
+                mssv VARCHAR(50) NULL,
+                search_name VARCHAR(255) GENERATED ALWAYS AS (
+                    LOWER(REPLACE(REPLACE(full_name, ' ', ''), '-', ''))
+                ) STORED,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE KEY uq_student_name (full_name),
+                KEY idx_mssv (mssv),
+                KEY idx_search_name (search_name)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        """)
+        
+        # Link table
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS link (
+                link_id BIGINT PRIMARY KEY AUTO_INCREMENT,
+                url TEXT NOT NULL,
+                url_hash BINARY(16) GENERATED ALWAYS AS (UNHEX(MD5(url))) STORED,
+                title VARCHAR(500) NULL,
+                kind VARCHAR(32) NULL,
+                gid VARCHAR(32) NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE KEY uq_link_hash (url_hash),
+                KEY idx_kind (kind),
+                KEY idx_gid (gid)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        """)
+        
+        # Student-Link junction table
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS student_link (
+                student_id BIGINT NOT NULL,
+                link_id BIGINT NOT NULL,
+                sheet_name VARCHAR(255) NULL,
+                row_number INT NULL DEFAULT 0,
+                address VARCHAR(16) NULL,
+                snippet VARCHAR(512) NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (student_id, link_id, row_number),
+                CONSTRAINT fk_sl_student FOREIGN KEY (student_id) 
+                    REFERENCES student(student_id) ON DELETE CASCADE,
+                CONSTRAINT fk_sl_link FOREIGN KEY (link_id) 
+                    REFERENCES link(link_id) ON DELETE CASCADE,
+                KEY idx_sheet (sheet_name),
+                KEY idx_row (row_number)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        """)
+        
+        conn.commit()
+        cursor.close()
+        conn.close()
+        
+        return {"ok": True, "message": f"Schema {DB_NAME} initialized successfully"}
+        
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
 
 if __name__ == "__main__":
+    print("=" * 60)
+    print("CTV Links Query System - Database Module")
+    print("=" * 60)
+    
     # Test connection
-    print("Testing MySQL connection...")
+    print("\n1. Testing connection...")
     result = test_connection()
     print(json.dumps(result, indent=2, ensure_ascii=False))
     
+    if not result.get("ok"):
+        print("\n✗ Connection failed!")
+        exit(1)
+    
+    print("\n✓ Connection successful!")
+    
+    # Init schema
+    print("\n2. Initializing schema...")
+    result = init_schema()
+    print(json.dumps(result, indent=2, ensure_ascii=False))
+    
     if result.get("ok"):
-        print("\n✓ MySQL connection successful!")
-        print(f"  Server version: {result.get('version')}")
-        print(f"  Server time: {result.get('server_time')}")
+        print("\n✓ Schema ready!")
+        
+        # Show stats
+        print("\n3. Database statistics:")
+        stats = get_stats()
+        print(json.dumps(stats, indent=2, ensure_ascii=False))
     else:
-        print("\n✗ MySQL connection failed!")
-        print(f"  Error: {result.get('error')}")
+        print("\n✗ Schema init failed!")
