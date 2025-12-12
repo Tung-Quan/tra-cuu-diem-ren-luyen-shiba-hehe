@@ -1,9 +1,9 @@
 // src/pages/Home.tsx
 import { useEffect, useState } from "react";
-import { getHealth } from "../lib/api";
+import { getHealth, type HealthResponse } from "../lib/api";
 
 export default function Home() {
-  const [info, setInfo] = useState<any>(null);
+  const [info, setInfo] = useState<HealthResponse | null>(null);
   const [err, setErr] = useState<string>();
 
   useEffect(() => {
@@ -38,15 +38,30 @@ export default function Home() {
         <div className="card">
           <div className="font-medium mb-2">Trạng thái backend</div>
           <ul className="text-sm grid sm:grid-cols-2 gap-y-1">
-            <li>Rows: <strong>{info.rows}</strong></li>
-            <li>Sheets: <strong>{info.sheets}</strong></li>
-            <li>Unique links: <strong>{info.links}</strong></li>
-            <li>OK: <strong>{String(info.ok)}</strong></li>
+            <li>Database rows: <strong>{info.database_rows}</strong></li>
+            <li>Sheets: <strong>{info.sheets.length}</strong></li>
+            <li>Total links: <strong>{info.links.total}</strong></li>
+            <li>Unique URLs: <strong>{info.links.unique_urls}</strong></li>
           </ul>
+
+          <div className="mt-3 text-sm">
+            <div className="font-medium mb-1">Services:</div>
+            <div className="flex gap-4 flex-wrap">
+              <span className={info.mysql_available ? "text-green-600" : "text-gray-400"}>
+                MySQL: {info.mysql_available ? "✓" : "✗"}
+              </span>
+              <span className={info.gspread_available ? "text-green-600" : "text-gray-400"}>
+                GSpread: {info.gspread_available ? "✓" : "✗"}
+              </span>
+              <span className={info.google_api_available ? "text-green-600" : "text-gray-400"}>
+                Google API: {info.google_api_available ? "✓" : "✗"}
+              </span>
+            </div>
+          </div>
 
           <div className="text-sm text-gray-600 mt-3">Endpoints hữu ích:</div>
           <ul className="list-disc ml-5 text-sm">
-            {["/search?q=...", "/mysql/ctv/search?q=...", "/sheets", "/links_index", "/debug/stats"].map((e) => (
+            {["/search?q=...", "/mysql/students/search?q=...", "/sheets", "/admin/health"].map((e) => (
               <li key={e}><code>{e}</code></li>
             ))}
           </ul>

@@ -1,6 +1,12 @@
 import { Link, NavLink } from "react-router-dom";
+import type { ReactNode } from "react";
 
-const NavItem = ({ to, children }: any) => (
+interface NavItemProps {
+  to: string;
+  children: ReactNode;
+}
+
+const NavItem = ({ to, children }: NavItemProps) => (
   <NavLink
     to={to}
     className={({ isActive }) =>
@@ -18,9 +24,9 @@ export default function Header() {
         <Link to="/" className="font-semibold">CTV Search</Link>
         <nav className="flex gap-2">
           <NavItem to="/">Trang chủ</NavItem>
-          <NavItem to="/search">Tìm kiếm</NavItem>
+          {/* <NavItem to="/search">Tìm kiếm</NavItem> */}
           <NavItem to="/mysql">search nhanh hơn</NavItem>
-          <NavItem to="/add-link">➕ Thêm Link</NavItem>
+          <NavItem to="/add-link">Thêm Link</NavItem>
           <NavItem to="/sheets">Sheets</NavItem>
           <NavItem to="/health">Health</NavItem>
         </nav>

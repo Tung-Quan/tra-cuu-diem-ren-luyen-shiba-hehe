@@ -1,10 +1,9 @@
 // src/lib/api.ts
-import axios, { type AxiosRequestConfig, type AxiosResponse } from "axios";
+import axios, { type AxiosRequestConfig } from "axios";
 
 // ===== Axios instance =====
 const BASE_URL =
   import.meta.env.VITE_API_URL ||
-  (import.meta as any).env?.REACT_APP_API_URL ||
   "http://127.0.0.1:8000";
 
 // Bạn vẫn có thể cấu hình timeout toàn cục qua env; nếu không đặt, mặc định 20000ms
@@ -17,10 +16,17 @@ export const api = axios.create({
 
 // ===== Types =====
 export type HealthResponse = {
-  ok: boolean;
-  rows: number;
-  sheets: number;
-  links: number;
+  status: string;
+  database_rows: number;
+  sheets: string[];
+  links: {
+    total: number;
+    unique_urls: number;
+  };
+  mysql_available: boolean;
+  gspread_available: boolean;
+  google_api_available: boolean;
+  deep_scan: boolean;
 };
 
 export type Hit = {
@@ -46,6 +52,16 @@ export type SearchResponse = {
 
 export type SheetsResponse = { sheets: string[] };
 
+export type DBStatsResponse = {
+  ok: boolean;
+  students: number;
+  links: number;
+  connections: number;
+  students_with_links: number;
+  top_students?: Array<{ full_name: string; mssv: string; link_count: number }>;
+  sheets?: string[];
+};
+
 export type FetchPreviewResponse = {
   kind: "docs" | "sheets" | "unknown";
   file_id?: string;
@@ -60,17 +76,6 @@ export type FetchPreviewResponse = {
 // ===== Helpers =====
 export const isAxiosTimeout = (e: unknown): boolean =>
   axios.isAxiosError(e) && e.code === "ECONNABORTED";
-
-// (tuỳ chọn) tạo AxiosResponse giả khi muốn nuốt lỗi mà vẫn trả response
-function fakeResponse<T>(config: AxiosRequestConfig, data: T): AxiosResponse<T> {
-  return {
-    data,
-    status: 200,
-    statusText: "OK (timeout ignored)",
-    headers: {},
-    config,
-  };
-}
 
 // ===== (tuỳ chọn) Interceptor: NUỐT timeout toàn cục =====
 // Bật nếu bạn muốn mọi request tự động bỏ qua timeout, thay vì throw.
@@ -94,44 +99,47 @@ function fakeResponse<T>(config: AxiosRequestConfig, data: T): AxiosResponse<T> 
 // );
 
 // ===== API helpers =====
-export const getHealth = () => api.get<HealthResponse>("/health");
+export const getHealth = () => api.get<HealthResponse>("/api/admin/health");
 
 // QUAN TRỌNG: TẮT TIMEOUT RIÊNG CHO /search (timeout: 0)
 export function search(
   q: string,
   opts?: { follow_links?: boolean; link_limit?: number; top_k?: number }
 ) {
-  const params: any = { q };
+  const params: Record<string, string | number | boolean> = { q };
   if (opts?.follow_links !== undefined) params.follow_links = opts.follow_links;
   if (opts?.link_limit) params.link_limit = opts.link_limit;
   if (opts?.top_k) params.top_k = opts.top_k;
 
   // timeout: 0 => không timeout (axios)
   const cfg: AxiosRequestConfig = { params, timeout: 0 };
-  return api.get<SearchResponse>("/search", cfg);
+  return api.get<SearchResponse>("/api/search", cfg);
 }
 
 export function fetchPreview(url: string) {
-  return api.get<FetchPreviewResponse>("/debug/check_url", { params: { u: url }, timeout: 0 });
+  return api.get<FetchPreviewResponse>("/api/debug/check_url", { params: { u: url }, timeout: 0 });
 }
 
 // ===== MySQL API =====
-export type MySQLActivity = {
-  id: number;
-  sheet_name: string;
-  row_number: number;
-  full_name: string;  // Tên đơn vị
-  mssv: string;  // STT
-  unit: string;  // Mảng hoạt động
-  program: string;  // Tên chương trình
-  score?: number;
+export type MySQLStudent = {
+  student_id: number;
+  full_name: string;
+  mssv: string;
+  search_name: string;
+  links: Array<{
+    link_id: number;
+    url: string;
+    title?: string;
+    sheet_name?: string;
+    row_number?: number;
+    snippet?: string;
+  }>;
 };
 
 export type MySQLSearchResponse = {
   ok: boolean;
   query: string;
-  search_type?: string;
-  results: MySQLActivity[];
+  results: MySQLStudent[];
   count: number;
   execution_time_ms: number;
 };
@@ -142,29 +150,15 @@ export type MySQLCountResponse = {
 };
 
 export function mysqlSearch(q: string, limit: number = 50) {
-  return api.get<MySQLSearchResponse>("/mysql/ctv/search", { 
+  return api.get<MySQLSearchResponse>("/api/mysql/students/search", { 
     params: { q, limit },
     timeout: 10000
   });
-}
-
-export function mysqlSearchByName(q: string, limit: number = 50) {
-  return api.get<MySQLSearchResponse>("/mysql/ctv/search_name", {
-    params: { q, limit },
-    timeout: 10000
-  });
-}
-
-export function mysqlCount() {
-  return api.get<MySQLCountResponse>("/mysql/ctv/count", { timeout: 5000 });
 }
 
 // ===== Add Link API =====
 export type AddLinkRequest = {
   url: string;
-  sheet: string;
-  row: number;
-  col?: number;
 };
 
 export type AddLinkResponse = {
@@ -183,14 +177,17 @@ export type AddLinkResponse = {
   error?: string;
 };
 
-export function addLink(data: AddLinkRequest) {
-  return api.post<AddLinkResponse>("/add_link", null, {
+export function addLink(data: AddLinkRequest, setLoading?: (loading: boolean) => void) {
+  // https://docs.google.com/spreadsheets/d/1-ypUyKglUjblgy1Gy0gITcdHF4YLdJnaCNKM_6_fCrI/edit?gid=29840804#gid=29840804 it can be this and only take the url after /d/[a-zA-Z0-9_-]+/ take the [a-zA-Z0-9_-]+/ part
+  const id = data.url.match(/\/d\/([a-zA-Z0-9_-]+)\//)?.[1];
+
+  //   'http://localhost:8000/api/admin/process-linked-sheets?spreadsheet_id=1-ypUyKglUjblgy1Gy0gITcdHF4YLdJnaCNKM_6_fCrI&dry_run=true&process_files=true' the standard API is a POST to /api/links/add with url parameter
+  setLoading?.(true);
+  return api.post<AddLinkResponse>("/api/admin/process-linked-sheets", null, {
     params: {
-      url: data.url,
-      sheet: data.sheet,
-      row: data.row,
-      col: data.col || 1,
+      spreadsheet_id: id,
+      dry_run: true,
+      process_files: true,
     },
-    timeout: 5000,
   });
 }

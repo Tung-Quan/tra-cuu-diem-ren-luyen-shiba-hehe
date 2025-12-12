@@ -1,8 +1,11 @@
 """
 Refactored main application with Swagger/OpenAPI documentation.
 """
+from pathlib import Path
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 
 from backend.routers import search_router, mysql_router, links_router, admin_router
 from backend.config import USE_DEEP, HAS_GSPREAD
@@ -81,6 +84,27 @@ app.include_router(search_router.router)
 app.include_router(mysql_router.router)
 app.include_router(links_router.router)
 app.include_router(admin_router.router)
+
+# ============= Static Files (Frontend) =============
+# Check if frontend dist folder exists
+FRONTEND_DIST = Path(__file__).parent.parent / "frontend" / "dist"
+if FRONTEND_DIST.exists():
+    # Mount static assets
+    app.mount("/assets", StaticFiles(directory=str(FRONTEND_DIST / "assets")), name="assets")
+    
+    # Serve index.html for all non-API routes (SPA routing)
+    @app.get("/{full_path:path}")
+    async def serve_frontend(full_path: str):
+        """Serve frontend for SPA routing."""
+        # Skip API routes
+        if full_path.startswith("api/") or full_path in ["docs", "redoc", "openapi.json"]:
+            return {"error": "Not found"}
+        
+        # Serve index.html for all other routes
+        index_file = FRONTEND_DIST / "index.html"
+        if index_file.exists():
+            return FileResponse(index_file)
+        return {"error": "Frontend not built"}
 
 # ============= Root Endpoint =============
 @app.get(

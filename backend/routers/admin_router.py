@@ -1,6 +1,7 @@
 """Admin router - endpoints for system management."""
 import time
 from fastapi import APIRouter, Query
+from typing import Optional, List
 
 from backend.config import (
     DATABASE_ROWS,
@@ -15,6 +16,8 @@ from backend.config import (
 )
 from backend.models import HealthResponse, RebuildResponse, BuildStats
 from backend.services.index_service import IndexService
+from backend.services.student_extractor import StudentExtractor
+from backend.services.link_extractor import LinkExtractor
 
 router = APIRouter(prefix="/api/admin", tags=["Admin"])
 
@@ -127,3 +130,117 @@ async def sync_mysql():
         }
     except Exception as e:
         return {"ok": False, "error": str(e)}
+
+
+@router.post(
+    "/extract-students",
+    summary="Extract sinh viên từ sheets vào MySQL",
+    description="""
+    Scan Google Sheets để tìm và extract thông tin sinh viên (Họ tên, MSSV).
+    Tự động nhận diện các sheet có format:
+    - HỌ VÀ TÊN | MSSV | LỚP
+    - Lưu vào MySQL database để search được bằng tên hoặc MSSV
+    """
+)
+async def extract_students(
+    spreadsheet_id: Optional[str] = Query(None, description="Spreadsheet ID (default: from config)"),
+    sheet_names: Optional[str] = Query(None, description="Comma-separated sheet names to process (default: all)"),
+    dry_run: bool = Query(True, description="Dry run mode - chỉ show kết quả không insert DB")
+):
+    """Extract student data from sheets and populate database."""
+    
+    sheets_list = None
+    if sheet_names:
+        sheets_list = [s.strip() for s in sheet_names.split(",")]
+    
+    result = StudentExtractor.scan_and_populate_database(
+        spreadsheet_id=spreadsheet_id,
+        sheet_names=sheets_list,
+        dry_run=dry_run
+    )
+    
+    return result
+
+
+@router.get(
+    "/db-stats",
+    summary="Thống kê MySQL database",
+    description="Lấy thống kê về số sinh viên, links, connections trong MySQL"
+)
+async def get_db_stats():
+    """Get database statistics."""
+    from backend.db_mysql import get_stats, HAS_MYSQL
+    
+    if not HAS_MYSQL:
+        return {"ok": False, "error": "MySQL not available"}
+    
+    try:
+        stats = get_stats()
+        return {"ok": True, **stats}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+@router.get(
+    "/config-info",
+    summary="Hiển thị thông tin config",
+    description="Hiển thị spreadsheet ID, service account email, và các config quan trọng"
+)
+async def get_config_info():
+    """Get configuration information for debugging."""
+    from backend.config import DEFAULT_SPREADSHEET_ID, GOOGLE_CREDS
+    import os
+    import json
+    
+    info = {
+        "spreadsheet_id": DEFAULT_SPREADSHEET_ID or "NOT SET",
+        "credentials_file": GOOGLE_CREDS,
+        "credentials_exists": os.path.exists(GOOGLE_CREDS) if GOOGLE_CREDS else False,
+        "service_account_email": None
+    }
+    
+    # Try to read service account email from credentials
+    if info["credentials_exists"]:
+        try:
+            with open(GOOGLE_CREDS, 'r') as f:
+                creds_data = json.load(f)
+                info["service_account_email"] = creds_data.get("client_email")
+        except Exception as e:
+            info["credentials_error"] = str(e)
+    
+    return info
+
+
+@router.post(
+    "/process-linked-sheets",
+    summary="Process main sheet và extract students từ linked files",
+    description="""
+    Workflow hoàn chỉnh:
+    1. Scan main sheet để tìm tất cả links (Google Sheets/Docs)
+    2. Mở từng linked file
+    3. Extract thông tin sinh viên (HỌ VÀ TÊN, MSSV)
+    4. Lưu vào MySQL database
+    
+    Ví dụ: Main sheet chứa danh sách chương trình, mỗi chương trình có link đến file danh sách sinh viên
+    """
+)
+async def process_linked_sheets(
+    spreadsheet_id: Optional[str] = Query(None, description="Main spreadsheet ID (default: from config)"),
+    sheet_names: Optional[str] = Query(None, description="Comma-separated sheet names to scan (default: all)"),
+    dry_run: bool = Query(True, description="Dry run - chỉ show kết quả, không insert DB"),
+    process_files: bool = Query(True, description="Process linked files or just list them")
+):
+    """Process main sheet and extract students from linked Google Sheets/Docs."""
+    
+    sheets_list = None
+    if sheet_names:
+        sheets_list = [s.strip() for s in sheet_names.split(",")]
+    
+    result = LinkExtractor.scan_main_sheet_and_process_links(
+        spreadsheet_id=spreadsheet_id,
+        sheet_names=sheets_list,
+        dry_run=dry_run,
+        process_linked_files=process_files
+    )
+    
+    return result

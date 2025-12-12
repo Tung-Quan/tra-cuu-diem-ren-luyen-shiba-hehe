@@ -1,114 +1,162 @@
 """MySQL router - endpoints for MySQL search."""
 import time
-from fastapi import APIRouter, Query, HTTPException
+from typing import List, Optional
+from fastapi import APIRouter, Query, Path, HTTPException
 
 from backend.config import db_mysql
 from backend.models import MySQLSearchRequest, MySQLSearchResponse, MySQLActivity
+from backend.db_mysql import (
+    search_student_links,
+    quick_search,
+    get_student_links_by_mssv,
+    get_stats,
+    HAS_MYSQL
+)
 
 router = APIRouter(prefix="/api/mysql", tags=["MySQL"])
 
 
 @router.get(
     "/search",
-    response_model=MySQLSearchResponse,
-    summary="Tìm kiếm trong MySQL (nhanh hơn)",
+    summary="Tìm kiếm sinh viên trong MySQL",
     description="""
-    Tìm kiếm trong bảng ctv_data với FULLTEXT index.
+    Tìm kiếm sinh viên theo tên hoặc MSSV, trả về danh sách sinh viên và links.
     
-    Ưu điểm:
-    - Nhanh hơn 10-100x so với fuzzy search
-    - Hỗ trợ Vietnamese FULLTEXT
-    - Scale tốt với dữ liệu lớn
+    Alias cho /students/search để backward compatibility.
     """
 )
 async def mysql_search(
-    q: str = Query(..., description="Search query", example="MSSV"),
-    limit: int = Query(100, ge=1, le=1000, description="Max results")
+    q: str = Query(..., description="Search query", example="Nguyễn"),
+    limit: int = Query(50, ge=1, le=100, description="Max results")
 ):
-    """Search in MySQL ctv_data table."""
-    if not db_mysql:
+    """Search students by name or MSSV - alias for /students/search."""
+    if not HAS_MYSQL:
         raise HTTPException(status_code=503, detail="MySQL not available")
     
     try:
         start = time.time()
-        results = db_mysql.search_ctv_data(q, limit=limit)
+        results = search_student_links(q, limit=limit)
         elapsed_ms = (time.time() - start) * 1000
         
-        activities = [
-            MySQLActivity(
-                id=r["id"],
-                full_name=r["full_name"],
-                unit=r["unit"],
-                program=r["program"],
-                search_text=r.get("search_text")
-            )
-            for r in results
-        ]
-        
-        return MySQLSearchResponse(
-            ok=True,
-            data=activities,
-            count=len(activities),
-            execution_time_ms=elapsed_ms
-        )
+        return {
+            "ok": True,
+            "query": q,
+            "count": len(results),
+            "results": results,
+            "execution_time_ms": round(elapsed_ms, 2)
+        }
         
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"MySQL search failed: {str(e)}")
 
 
 @router.get(
-    "/count",
-    summary="Đếm số records trong MySQL",
-    description="Trả về tổng số records trong bảng ctv_data"
+    "/stats",
+    summary="Thống kê database MySQL",
+    description="Lấy thống kê tổng quan về students, links, connections"
 )
-async def mysql_count():
-    """Get total count of records in ctv_data."""
-    if not db_mysql:
+async def mysql_stats():
+    """Get MySQL database statistics."""
+    if not HAS_MYSQL:
         raise HTTPException(status_code=503, detail="MySQL not available")
     
     try:
-        count = db_mysql.count_ctv_data()
-        return {"ok": True, "count": count}
+        stats = get_stats()
+        return {
+            "ok": True,
+            **stats
+        }
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Count failed: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Stats failed: {str(e)}")
 
 
 @router.get(
-    "/links/count",
-    summary="Đếm số links trong MySQL",
-    description="Trả về tổng số links trong bảng links"
+    "/students/search",
+    summary="Tìm sinh viên theo tên hoặc MSSV",
+    description="""
+    Tìm sinh viên trong database theo tên hoặc MSSV, trả về danh sách links.
+    
+    Ví dụ:
+    - /api/mysql/students/search?q=Nguyễn Văn A
+    - /api/mysql/students/search?q=2012345
+    """
 )
-async def mysql_links_count():
-    """Get total count of links in MySQL."""
-    if not db_mysql:
+async def search_students(
+    q: str = Query(..., description="Tên hoặc MSSV sinh viên", example="Nguyễn"),
+    limit: int = Query(50, ge=1, le=100, description="Số kết quả tối đa")
+):
+    """Search students by name or MSSV."""
+    if not HAS_MYSQL:
         raise HTTPException(status_code=503, detail="MySQL not available")
     
     try:
-        count = db_mysql.count_links()
-        return {"ok": True, "count": count}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Count failed: {str(e)}")
-
-
-@router.get(
-    "/links/summary",
-    summary="Lấy thống kê links trong MySQL",
-    description="Thống kê về links đã sync vào MySQL"
-)
-async def mysql_links_summary():
-    """Get MySQL links summary."""
-    if not db_mysql:
-        raise HTTPException(status_code=503, detail="MySQL not available")
-    
-    try:
-        count = db_mysql.count_links()
-        # Get sample links
-        sample = db_mysql.get_links(limit=5)
+        start = time.time()
+        results = search_student_links(q, limit=limit)
+        elapsed_ms = (time.time() - start) * 1000
         
         return {
             "ok": True,
-            "total_links": count,
-            "sample_links": sample
+            "query": q,
+            "count": len(results),
+            "results": results,
+            "execution_time_ms": round(elapsed_ms, 2)
         }
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Summary failed: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Search failed: {str(e)}")
+
+
+@router.get(
+    "/students/quick",
+    summary="Quick search sinh viên (chỉ count links)",
+    description="Tìm nhanh sinh viên, chỉ trả về thông tin cơ bản + số lượng links"
+)
+async def quick_search_students(
+    q: str = Query(..., description="Tên hoặc MSSV sinh viên", example="Trần"),
+    limit: int = Query(20, ge=1, le=50, description="Số kết quả tối đa")
+):
+    """Quick search students - returns only student info + link count."""
+    if not HAS_MYSQL:
+        raise HTTPException(status_code=503, detail="MySQL not available")
+    
+    try:
+        start = time.time()
+        results = quick_search(q, limit=limit)
+        elapsed_ms = (time.time() - start) * 1000
+        
+        return {
+            "ok": True,
+            "query": q,
+            "count": len(results),
+            "results": results,
+            "execution_time_ms": round(elapsed_ms, 2)
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Quick search failed: {str(e)}")
+
+
+@router.get(
+    "/students/{mssv}",
+    summary="Lấy thông tin sinh viên theo MSSV (exact)",
+    description="Lấy tất cả links của sinh viên theo MSSV (exact match)"
+)
+async def get_student_by_mssv(
+    mssv: str = Path(..., description="MSSV của sinh viên", example="2012345")
+):
+    """Get student by exact MSSV."""
+    if not HAS_MYSQL:
+        raise HTTPException(status_code=503, detail="MySQL not available")
+    
+    try:
+        result = get_student_links_by_mssv(mssv)
+        
+        if not result:
+            raise HTTPException(status_code=404, detail=f"Student with MSSV {mssv} not found")
+        
+        return {
+            "ok": True,
+            "student": result
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Query failed: {str(e)}")

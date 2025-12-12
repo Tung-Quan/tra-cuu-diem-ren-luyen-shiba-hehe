@@ -123,6 +123,31 @@ def get_drive_service():
 
 
 # =========================
+# Google Docs API Service
+# =========================
+def get_docs_service():
+    """Get or create Docs API service singleton."""
+    global _DOCS_SERVICE
+    if _DOCS_SERVICE:
+        return _DOCS_SERVICE
+    
+    if not HAS_GOOGLE_API or Credentials is None:
+        debug_log("[docs] googleapiclient not available")
+        return None
+    
+    try:
+        creds = Credentials.from_service_account_file(
+            _resolve_creds_path(GOOGLE_CREDS),
+            scopes=["https://www.googleapis.com/auth/documents.readonly"],
+        )
+        _DOCS_SERVICE = build("docs", "v1", credentials=creds, cache_discovery=False)
+        return _DOCS_SERVICE
+    except Exception as e:
+        debug_log(f"[docs] cannot build service: {e}")
+        return None
+
+
+# =========================
 # Drive Operations
 # =========================
 def get_drive_file_meta(file_id: str) -> Optional[dict]:

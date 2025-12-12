@@ -100,10 +100,13 @@ def search_student_links(query: str, limit: int = 50) -> List[Dict[str, Any]]:
                 s.student_id,
                 s.full_name,
                 s.mssv,
+                s.search_name,
+                sl.link_id,
                 l.url,
+                l.title,
                 sl.sheet_name,
                 sl.row_number,
-                sl.address
+                sl.snippet
             FROM student s
             LEFT JOIN student_link sl ON s.student_id = sl.student_id
             LEFT JOIN link l ON sl.link_id = l.link_id
@@ -128,15 +131,18 @@ def search_student_links(query: str, limit: int = 50) -> List[Dict[str, Any]]:
                     "student_id": sid,
                     "full_name": row["full_name"],
                     "mssv": row["mssv"],
+                    "search_name": row["search_name"],
                     "links": []
                 }
             
             if row["url"]:  # Only add if link exists
                 students_dict[sid]["links"].append({
+                    "link_id": row["link_id"],
                     "url": row["url"],
-                    "sheet": row["sheet_name"],
-                    "row": row["row_number"],
-                    "address": row["address"]
+                    "title": row["title"],
+                    "sheet_name": row["sheet_name"],
+                    "row_number": row["row_number"],
+                    "snippet": row["snippet"]
                 })
         
         return list(students_dict.values())[:limit]

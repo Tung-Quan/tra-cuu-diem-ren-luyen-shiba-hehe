@@ -162,7 +162,7 @@ class IndexService:
             map_before = len(LINK_POOL)
 
             if verbose:
-                _dlog(f"[index] Sheet '{title}' size ≈ {nrows}x{ncols}")
+                _dlog(f"[index] Sheet '{title}' size = {nrows}x{ncols}")
 
             # Pack rows for search
             base_row_index = len(rows)

@@ -1,29 +1,19 @@
 // src/pages/MySQLSearchPage.tsx
-import { useEffect, useState, useMemo } from "react";
+import { useEffect, useState } from "react";
 import { useSearchParams } from "react-router-dom";
-import { mysqlSearch, mysqlCount, type MySQLActivity } from "../lib/api";
+import { mysqlSearch, type MySQLStudent } from "../lib/api";
 import SearchBar from "../components/SearchBar";
 import Loading from "../components/Loading";
 import ErrorBanner from "../components/ErrorBanner";
 
-type SheetSummaryItem = { sheet: string; count: number };
-
 export default function MySQLSearchPage() {
   const [sp] = useSearchParams();
   const q = (sp.get("q") || "").trim();
-  const [results, setResults] = useState<MySQLActivity[]>([]);
+  const [results, setResults] = useState<MySQLStudent[]>([]);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string>();
   const [execTime, setExecTime] = useState<number>(0);
-  const [totalCount, setTotalCount] = useState<number>(0);
   const [limit, setLimit] = useState(50);
-
-  // Load total count on mount
-  useEffect(() => {
-    mysqlCount()
-      .then((r) => setTotalCount(r.data.count))
-      .catch((e) => console.error("Failed to get count:", e));
-  }, []);
 
   // Search when query changes
   useEffect(() => {
@@ -46,22 +36,12 @@ export default function MySQLSearchPage() {
       })
       .finally(() => setLoading(false));
   }, [q, limit]);
-
-  const sheetSummary: SheetSummaryItem[] = useMemo(() => {
-    const map = new Map<string, number>();
-    results.forEach((r) => map.set(r.sheet_name, (map.get(r.sheet_name) || 0) + 1));
-    return Array.from(map.entries())
-      .map(([sheet, count]) => ({ sheet, count }))
-      .sort((a, b) => b.count - a.count);
-  }, [results]);
-
   return (
     <div className="grid gap-4">
       <div className="card">
-        <h1 className="text-2xl font-bold">🔍 MySQL Search - Tra Cứu Nhanh</h1>
+        <h1 className="text-2xl font-bold"> MySQL Search - Tra Cứu Sinh Viên</h1>
         <p className="text-sm text-gray-600 mt-2">
-          Tìm kiếm hoạt động theo đơn vị, chương trình. 
-          Dữ liệu: {totalCount.toLocaleString()} activities trong MySQL.
+          Tìm kiếm sinh viên theo tên hoặc MSSV. Dữ liệu từ MySQL database.
         </p>
       </div>
 
@@ -70,7 +50,7 @@ export default function MySQLSearchPage() {
       {q && (
         <div className="text-sm text-gray-600">
           Từ khóa: <span className="font-medium">{q}</span>
-          {execTime > 0 && <span className="ml-3">⚡ {execTime}ms</span>}
+          {execTime > 0 && <span className="ml-3">⚡ {execTime.toFixed(2)}ms</span>}
         </div>
       )}
 
@@ -91,41 +71,29 @@ export default function MySQLSearchPage() {
       {loading && <Loading />}
       {err && <ErrorBanner message={err} />}
 
-      {!!sheetSummary.length && (
-        <div className="card">
-          <div className="font-medium mb-2">📊 Tổng hợp theo sheet</div>
-          <div className="flex flex-wrap gap-2">
-            {sheetSummary.map((item) => (
-              <div key={item.sheet} className="px-3 py-1 bg-blue-100 rounded-full text-sm">
-                {item.sheet}: <span className="font-medium">{item.count}</span>
-              </div>
-            ))}
-          </div>
-        </div>
+      {q && !loading && results.length === 0 && !err && (
+        <div className="card text-center text-gray-500">Không tìm thấy kết quả cho "{q}"</div>
       )}
 
-      {!!results.length && (
+      {results.length > 0 && (
         <div className="grid gap-3">
           <div className="text-sm text-gray-600">
             Tìm thấy <span className="font-medium">{results.length}</span> kết quả
           </div>
-          {results.map((r) => (
-            <ActivityCard key={r.id} activity={r} />
-          ))}
-        </div>
-      )}
 
-      {q && !loading && results.length === 0 && !err && (
-        <div className="card text-center text-gray-500">
-          Không tìm thấy kết quả cho "{q}"
+          <div className="grid gap-3">
+            {results.map((student) => (
+              <StudentCard key={student.student_id} student={student} />
+            ))}
+          </div>
         </div>
       )}
     </div>
   );
 }
 
-// Activity Card Component
-function ActivityCard({ activity }: { activity: MySQLActivity }) {
+// Student Card Component
+function StudentCard({ student }: { student: MySQLStudent }) {
   const [expanded, setExpanded] = useState(false);
 
   return (
@@ -134,42 +102,44 @@ function ActivityCard({ activity }: { activity: MySQLActivity }) {
         <div className="flex-1">
           {/* Header */}
           <div className="flex items-center gap-2 mb-2">
-            <span className="px-2 py-0.5 bg-blue-100 text-blue-800 text-xs rounded">
-              #{activity.mssv || activity.row_number}
+            <span className="px-2 py-0.5 bg-blue-100 text-blue-800 text-xs rounded font-mono">
+              {student.mssv}
             </span>
-            <span className="text-xs text-gray-500">
-              {activity.sheet_name} • Row {activity.row_number}
-            </span>
-            {activity.score && (
-              <span className="text-xs text-gray-400">
-                Score: {activity.score.toFixed(2)}
-              </span>
-            )}
           </div>
 
           {/* Main Content */}
           <div className="space-y-2">
-            {activity.full_name && (
-              <div>
-                <span className="text-sm font-semibold text-gray-700">Đơn vị: </span>
-                <span className="text-sm">{activity.full_name}</span>
-              </div>
-            )}
+            <div>
+              <span className="text-base font-semibold text-gray-900">{student.full_name}</span>
+            </div>
 
-            {activity.unit && (
+            {student.links && student.links.length > 0 && (
               <div>
-                <span className="text-sm font-semibold text-gray-700">Mảng hoạt động: </span>
-                <span className="text-sm">{activity.unit}</span>
-              </div>
-            )}
-
-            {activity.program && (
-              <div>
-                <span className="text-sm font-semibold text-gray-700">Chương trình: </span>
-                <div className={`text-sm mt-1 ${expanded ? '' : 'line-clamp-3'}`}>
-                  {activity.program.split('\n').map((line, i) => (
-                    <div key={i} className="ml-4">
-                      {line.startsWith('-') || line.startsWith('•') ? line : `• ${line}`}
+                <div className="text-sm font-semibold text-gray-700 mb-1">
+                  Tham gia {student.links.length} chương trình:
+                </div>
+                <div className={`space-y-2 ${expanded ? '' : 'max-h-32 overflow-hidden'}`}>
+                  {student.links.map((link) => (
+                    <div key={link.link_id} className="ml-4 text-sm border-l-2 pl-3 border-gray-200">
+                      <div className="font-medium text-gray-800">
+                        {link.sheet_name || 'Unknown Sheet'}
+                        {link.row_number && (
+                          <span className="text-gray-400 ml-2 text-xs">Row {link.row_number}</span>
+                        )}
+                      </div>
+                      {link.snippet && (
+                        <div className="text-gray-600 text-xs mt-1">{link.snippet}</div>
+                      )}
+                      {link.url && (
+                        <a 
+                          href={link.url} 
+                          target="_blank" 
+                          rel="noopener noreferrer"
+                          className="text-blue-600 hover:text-blue-800 text-xs inline-flex items-center gap-1 mt-1"
+                        >
+                          Xem chi tiết →
+                        </a>
+                      )}
                     </div>
                   ))}
                 </div>
@@ -179,7 +149,7 @@ function ActivityCard({ activity }: { activity: MySQLActivity }) {
         </div>
 
         {/* Expand Button */}
-        {activity.program && activity.program.length > 200 && (
+        {student.links && student.links.length > 2 && (
           <button
             onClick={() => setExpanded(!expanded)}
             className="text-xs text-blue-600 hover:text-blue-800 font-medium whitespace-nowrap"
