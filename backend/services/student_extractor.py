@@ -147,8 +147,9 @@ class StudentExtractor:
                     data_row = values[data_idx]
                     
                     # Stop if we hit another header or empty section
-                    if data_idx - data_start > 200:  # Safety limit
-                        break
+                    # Removed arbitrary 200 limit to support larger files
+                    # if data_idx - data_start > 200:  # Safety limit
+                    #     break
                     
                     # Get name and MSSV
                     raw_name = data_row[name_col] if name_col < len(data_row) else ""

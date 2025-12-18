@@ -50,7 +50,7 @@ export default function MySQLSearchPage() {
       {q && (
         <div className="text-sm text-gray-600">
           Từ khóa: <span className="font-medium">{q}</span>
-          {execTime > 0 && <span className="ml-3">⚡ {execTime.toFixed(2)}ms</span>}
+          {execTime > 0 && <span className="ml-3">{execTime.toFixed(2)}ms</span>}
         </div>
       )}
 
@@ -77,10 +77,6 @@ export default function MySQLSearchPage() {
 
       {results.length > 0 && (
         <div className="grid gap-3">
-          <div className="text-sm text-gray-600">
-            Tìm thấy <span className="font-medium">{results.length}</span> kết quả
-          </div>
-
           <div className="grid gap-3">
             {results.map((student) => (
               <StudentCard key={student.student_id} student={student} />
@@ -119,29 +115,83 @@ function StudentCard({ student }: { student: MySQLStudent }) {
                   Tham gia {student.links.length} chương trình:
                 </div>
                 <div className={`space-y-2 ${expanded ? '' : 'max-h-32 overflow-hidden'}`}>
-                  {student.links.map((link) => (
-                    <div key={link.link_id} className="ml-4 text-sm border-l-2 pl-3 border-gray-200">
-                      <div className="font-medium text-gray-800">
-                        {link.sheet_name || 'Unknown Sheet'}
-                        {link.row_number && (
-                          <span className="text-gray-400 ml-2 text-xs">Row {link.row_number}</span>
-                        )}
+                  {(() => {
+                    // Sort links by gid (group identifier) then by sheet_name/row
+                    const links = [...student.links].sort((a, b) => {
+                      const ga = (a.gid || a.sheet_name || '').toString();
+                      const gb = (b.gid || b.sheet_name || '').toString();
+                      if (ga === gb) return (a.row_number || 0) - (b.row_number || 0);
+                      return ga.localeCompare(gb, undefined, { sensitivity: 'base' });
+                    });
+
+                    // Group by gid (or sheet_name fallback)
+                    const groups: Record<string, typeof links> = {};
+                    for (const l of links) {
+                      const key = (l.gid || l.sheet_name || 'Unknown').toString();
+                      groups[key] = groups[key] || [];
+                      groups[key].push(l);
+                    }
+
+                    return Object.keys(groups).map((gid) => (
+                      <div key={gid} className="mb-2">
+                        <div className="text-xs text-gray-500 font-medium mb-1">{gid}</div>
+                        <div className="space-y-2">
+                          {groups[gid].map((link) => {
+                            const titleLabel = link.title && link.title.length > 120
+                              ? `${link.title.slice(0, 120)}…`
+                              : link.title || link.sheet_name || 'Unknown Sheet';
+
+                            return (
+                              <div key={link.link_id} className="ml-4 text-sm border-l-2 pl-3 border-gray-200">
+                                <div className="font-medium text-gray-800">
+                                  {link.url ? (
+                                    <a
+                                      href={link.url}
+                                      target="_blank"
+                                      rel="noopener noreferrer"
+                                      title={link.title || ''}
+                                      className="text-blue-700 hover:text-blue-900"
+                                    >
+                                      {titleLabel}
+                                    </a>
+                                  ) : (
+                                    <span title={link.title || ''}>{titleLabel}</span>
+                                  )}
+
+                                  {link.row_number && (
+                                    <span className="text-gray-400 ml-2 text-xs">Row {link.row_number}</span>
+                                  )}
+
+                                  {/* Show sheet_name separately from title */}
+                                  {link.sheet_name && (
+                                    <div className="text-xs text-gray-500 mt-1">{link.sheet_name}</div>
+                                  )}
+                                </div>
+
+                                {link.snippet && (
+                                  <div className="text-gray-600 text-xs mt-1">{link.snippet}</div>
+                                )}
+
+                                {link.url && (
+                                  <div className="mt-1">
+                                    <a
+                                      href={link.url}
+                                      target="_blank"
+                                      rel="noopener noreferrer"
+                                      className="text-blue-600 hover:text-blue-800 text-xs inline-flex items-center gap-1"
+                                    >
+                                      Xem chi tiết →
+                                    </a>
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
                       </div>
-                      {link.snippet && (
-                        <div className="text-gray-600 text-xs mt-1">{link.snippet}</div>
-                      )}
-                      {link.url && (
-                        <a 
-                          href={link.url} 
-                          target="_blank" 
-                          rel="noopener noreferrer"
-                          className="text-blue-600 hover:text-blue-800 text-xs inline-flex items-center gap-1 mt-1"
-                        >
-                          Xem chi tiết →
-                        </a>
-                      )}
-                    </div>
-                  ))}
+                    ));
+                  })()}
+                  
                 </div>
               </div>
             )}

@@ -104,9 +104,11 @@ def search_student_links(query: str, limit: int = 50) -> List[Dict[str, Any]]:
                 sl.link_id,
                 l.url,
                 l.title,
+                l.kind,
+                l.gid,
                 sl.sheet_name,
                 sl.row_number,
-                sl.snippet
+                sl.snippet,
             FROM student s
             LEFT JOIN student_link sl ON s.student_id = sl.student_id
             LEFT JOIN link l ON sl.link_id = l.link_id
@@ -140,6 +142,8 @@ def search_student_links(query: str, limit: int = 50) -> List[Dict[str, Any]]:
                     "link_id": row["link_id"],
                     "url": row["url"],
                     "title": row["title"],
+                    "kind": row["kind"],
+                    "gid": row["gid"],
                     "sheet_name": row["sheet_name"],
                     "row_number": row["row_number"],
                     "snippet": row["snippet"]
@@ -193,6 +197,7 @@ def get_student_links_by_mssv(mssv: str) -> Optional[Dict[str, Any]]:
                 l.url,
                 l.title,
                 l.kind,
+                l.gid,
                 sl.sheet_name,
                 sl.row_number,
                 sl.address,
@@ -224,6 +229,7 @@ def get_student_links_by_mssv(mssv: str) -> Optional[Dict[str, Any]]:
                     "url": row["url"],
                     "title": row["title"],
                     "kind": row["kind"],
+                    "gid": row["gid"],
                     "sheet": row["sheet_name"],
                     "row": row["row_number"],
                     "address": row["address"],
@@ -316,45 +322,143 @@ def link_student_to_url(
 # Batch Operations
 # =========================
 
+def get_student_id_by_name(full_name: str) -> Optional[int]:
+    """Check if student exists by exact full_name."""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT student_id FROM student WHERE full_name = %s", (full_name,))
+        row = cursor.fetchone()
+        cursor.close()
+        return row[0] if row else None
+
+
+def get_link_id_by_url(url: str) -> Optional[int]:
+    """Check if link exists by url (using hash)."""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT link_id FROM link WHERE url_hash = UNHEX(MD5(%s))", (url,))
+        row = cursor.fetchone()
+        cursor.close()
+        return row[0] if row else None
+
+
+def check_student_link_exists(student_id: int, link_id: int, row_number: int) -> bool:
+    """Check if connection exists."""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT 1 FROM student_link WHERE student_id = %s AND link_id = %s AND row_number = %s",
+            (student_id, link_id, row_number)
+        )
+        row = cursor.fetchone()
+        cursor.close()
+        return row is not None
+
+
 def batch_insert_student_links(records: List[Dict[str, Any]]) -> int:
     """
     Batch insert student-link records.
-    
-    records: [{
-        "full_name": str,
-        "mssv": str,
-        "url": str,
-        "sheet": str,
-        "row": int,
-        "address": str,
-        "snippet": str
-    }]
-    
-    Returns: số records đã insert
+    Uses a single connection to avoid socket exhaustion (Error 10048).
     """
     inserted = 0
     
-    for rec in records:
-        try:
-            # Insert student
-            student_id = insert_student(rec.get("full_name", ""), rec.get("mssv"))
-            
-            # Insert link
-            link_id = insert_link(rec.get("url", ""))
-            
-            # Link them
-            if link_student_to_url(
-                student_id, link_id,
-                rec.get("sheet"),
-                rec.get("row"),
-                rec.get("address"),
-                rec.get("snippet")
-            ):
-                inserted += 1
+    # SQL Templates
+    sql_check_student = "SELECT student_id FROM student WHERE full_name = %s"
+    sql_insert_student = """
+        INSERT INTO student (full_name, mssv)
+        VALUES (%s, %s)
+        ON DUPLICATE KEY UPDATE 
+            mssv = VALUES(mssv),
+            student_id = LAST_INSERT_ID(student_id)
+    """
+    
+    sql_check_link = "SELECT link_id FROM link WHERE url_hash = UNHEX(MD5(%s))"
+    sql_insert_link = """
+        INSERT INTO link (url, title, kind, gid)
+        VALUES (%s, %s, %s, %s)
+        ON DUPLICATE KEY UPDATE 
+            title = VALUES(title),
+            kind = VALUES(kind),
+            gid = VALUES(gid),
+            link_id = LAST_INSERT_ID(link_id)
+    """
+    
+    sql_check_conn = "SELECT 1 FROM student_link WHERE student_id = %s AND link_id = %s AND row_number = %s"
+    sql_insert_conn = """
+        INSERT INTO student_link 
+        (student_id, link_id, sheet_name, row_number, address, snippet)
+        VALUES (%s, %s, %s, %s, %s, %s)
+    """
+
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        
+        for rec in records:
+            try:
+                # 1. Check/Get Student
+                full_name = rec.get("full_name", "").strip()
+                if not full_name:
+                    continue
+
+                mssv = rec.get("mssv")
                 
-        except Exception as e:
-            print(f"[batch_insert] Error: {e}")
-            continue
+                cursor.execute(sql_check_student, (full_name,))
+                row = cursor.fetchone()
+                
+                if row:
+                    student_id = row[0]
+                else:
+                    cursor.execute(sql_insert_student, (full_name, mssv))
+                    student_id = cursor.lastrowid
+                
+                # 2. Check/Get Link
+                url = rec.get("url", "")
+                title = rec.get("title")
+                kind = rec.get("kind")
+                # Use 'main_sheet' (Spreadsheet Title) as gid primarily, fallback to 'program'
+                gid = rec.get("main_sheet") or rec.get("program")
+                
+                if not url:
+                    continue
+                
+                # Check link type for logging
+                if kind == 'drive' or 'drive.google.com' in url or 'docs.google.com' in url:
+                    print(f"[batch_insert] Processing Drive link: {url} (Title: {title}, Kind: {kind}, Gid: {gid})")
+                    
+                cursor.execute(sql_check_link, (url,))
+                row = cursor.fetchone()
+                
+                if row:
+                    link_id = row[0]
+                    # Update metadata if available
+                    if title or kind or gid:
+                        cursor.execute(
+                            "UPDATE link SET title = COALESCE(%s, title), kind = COALESCE(%s, kind), gid = COALESCE(%s, gid) WHERE link_id = %s",
+                            (title, kind, gid, link_id)
+                        )
+                else:
+                    cursor.execute(sql_insert_link, (url, title, kind, gid))
+                    link_id = cursor.lastrowid
+                
+                # 3. Check/Create Connection
+                row_num = rec.get("row") or 0
+                cursor.execute(sql_check_conn, (student_id, link_id, row_num))
+                
+                if not cursor.fetchone():
+                    cursor.execute(sql_insert_conn, (
+                        student_id, link_id, 
+                        rec.get("sheet"), row_num, 
+                        rec.get("address"), rec.get("snippet")
+                    ))
+                    inserted += 1
+                
+                conn.commit()
+                
+            except Exception as e:
+                print(f"[batch_insert] Error processing record {rec.get('full_name')}: {e}")
+                continue
+        
+        cursor.close()
     
     return inserted
 
@@ -446,7 +550,7 @@ def init_schema() -> Dict[str, Any]:
                 url_hash BINARY(16) GENERATED ALWAYS AS (UNHEX(MD5(url))) STORED,
                 title VARCHAR(500) NULL,
                 kind VARCHAR(32) NULL,
-                gid VARCHAR(32) NULL,
+                gid VARCHAR(512) NULL,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 UNIQUE KEY uq_link_hash (url_hash),
                 KEY idx_kind (kind),

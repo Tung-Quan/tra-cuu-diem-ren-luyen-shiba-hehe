@@ -20,7 +20,7 @@ const NavItem = ({ to, children }: NavItemProps) => (
 export default function Header() {
   return (
     <header className="bg-white border-b">
-      <div className="mx-auto max-w-6xl flex items-center justify-between p-4">
+      <div className="flex items-center justify-between p-4">
         <Link to="/" className="font-semibold">CTV Search</Link>
         <nav className="flex gap-2">
           <NavItem to="/">Trang chủ</NavItem>

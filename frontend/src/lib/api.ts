@@ -131,6 +131,8 @@ export type MySQLStudent = {
     url: string;
     title?: string;
     sheet_name?: string;
+    gid?: string;
+    kind?: string;
     row_number?: number;
     snippet?: string;
   }>;
