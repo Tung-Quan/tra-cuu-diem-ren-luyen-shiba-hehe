@@ -1,23 +1,30 @@
-# db_mysql.py — Simplified MySQL for CTV Links Query System
 import os
 import json
+import time
+import threading
+from functools import lru_cache
 from typing import Any, Dict, List, Optional, Tuple
 from contextlib import contextmanager
 
 try:
     import mysql.connector
     from mysql.connector import Error as MySQLError
+    from mysql.connector import pooling
+    # Explicitly import PoolError to catch it
+    from mysql.connector.errors import PoolError
     HAS_MYSQL = True
 except ImportError:
     HAS_MYSQL = False
     MySQLError = Exception  # type: ignore
+    PoolError = Exception
+    pooling = None
 
 
 # =========================
 # Configuration
 # =========================
 MYSQL_CONFIG = {
-    "host": os.environ.get("MYSQL_HOST", "localhost"),
+    "host": os.environ.get("MYSQL_HOST", "127.0.0.1"),
     "port": int(os.environ.get("MYSQL_PORT", "3306")),
     "user": os.environ.get("MYSQL_USER", "root"),
     "password": os.environ.get("MYSQL_PASSWORD", ""),
@@ -25,9 +32,13 @@ MYSQL_CONFIG = {
     "collation": "utf8mb4_unicode_ci",
     "autocommit": False,
     "database": os.environ.get("MYSQL_DATABASE", "ctv_links"),
+    "pool_name": "ctv_pool",
+    "pool_size": 20,
 }
 
 DB_NAME = "ctv_links"
+DB_POOL = None
+POOL_LOCK = threading.Lock()
 
 
 # =========================
@@ -35,21 +46,60 @@ DB_NAME = "ctv_links"
 # =========================
 @contextmanager
 def get_db_connection():
-    """Context manager để tạo MySQL connection."""
+    """Context manager để tạo MySQL connection từ Pool (Thread-safe)."""
+    global DB_POOL
+    
     if not HAS_MYSQL:
         raise ImportError("mysql-connector-python not installed")
     
+    # 1. Initialize Pool safely
+    if DB_POOL is None:
+        with POOL_LOCK:
+            if DB_POOL is None:
+                try:
+                    DB_POOL = mysql.connector.pooling.MySQLConnectionPool(**MYSQL_CONFIG)
+                except MySQLError as err:
+                     # Allow connecting without DB for init_schema
+                     if err.errno == 1049: # Unknown database
+                         temp_config = MYSQL_CONFIG.copy()
+                         temp_config.pop("database", None)
+                         temp_config.pop("pool_name", None)
+                         temp_config.pop("pool_size", None)
+                         conn = mysql.connector.connect(**temp_config)
+                         yield conn
+                         return
+                     raise err
+
+    # 2. Get Connection with Retry
     conn = None
+    attempts = 0
+    max_retries = 3
+    
+    while attempts < max_retries:
+        try:
+            conn = DB_POOL.get_connection()
+            break
+        except PoolError:
+            attempts += 1
+            if attempts == max_retries:
+                raise MySQLError(f"Connection pool exhausted after {max_retries} retries")
+            time.sleep(0.2)  # Wait for a connection to be returned
+        except MySQLError as e:
+            raise e
+
+    # 3. Yield and Close
     try:
-        conn = mysql.connector.connect(**MYSQL_CONFIG)
         yield conn
     except MySQLError as e:
         if conn:
-            conn.rollback()
+            try:
+                conn.rollback()
+            except:
+                pass
         raise e
     finally:
         if conn and conn.is_connected():
-            conn.close()
+            conn.close()  # Returns to pool
 
 
 def test_connection() -> Dict[str, Any]:
@@ -80,6 +130,7 @@ def test_connection() -> Dict[str, Any]:
 # Core Query Functions: Query → MSSV/Name → Links
 # =========================
 
+@lru_cache(maxsize=1024)
 def search_student_links(query: str, limit: int = 50) -> List[Dict[str, Any]]:
     """
     Core function: Query tên hoặc MSSV sinh viên, trả về links.
@@ -108,7 +159,7 @@ def search_student_links(query: str, limit: int = 50) -> List[Dict[str, Any]]:
                 l.gid,
                 sl.sheet_name,
                 sl.row_number,
-                sl.snippet,
+                sl.snippet
             FROM student s
             LEFT JOIN student_link sl ON s.student_id = sl.student_id
             LEFT JOIN link l ON sl.link_id = l.link_id
@@ -152,6 +203,7 @@ def search_student_links(query: str, limit: int = 50) -> List[Dict[str, Any]]:
         return list(students_dict.values())[:limit]
 
 
+@lru_cache(maxsize=1024)
 def quick_search(query: str, limit: int = 20) -> List[Dict[str, Any]]:
     """
     Quick search - chỉ trả về student info + count links.

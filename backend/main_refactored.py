@@ -53,8 +53,8 @@ API tìm kiếm thông minh cho hệ thống CTV, hỗ trợ:
 Hiện tại API không yêu cầu authentication (CORS enabled cho mọi origin).
 
 ## Rate Limiting
-
-Không có rate limiting. Sử dụng hợp lý! 😊
+    
+    Enabled: 100 requests / minute / IP.
     """,
     version="3.0.0",
     docs_url="/docs",
@@ -68,6 +68,14 @@ Không có rate limiting. Sử dụng hợp lý! 😊
         "name": "MIT License",
         "url": "https://opensource.org/licenses/MIT"
     }
+)
+
+from backend.middleware.rate_limiter import RateLimitMiddleware
+
+app.add_middleware(
+    RateLimitMiddleware,
+    max_requests=100,  # 100 requests per minute per IP
+    window_seconds=60
 )
 
 # ============= CORS =============

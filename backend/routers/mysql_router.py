@@ -25,7 +25,7 @@ router = APIRouter(prefix="/api/mysql", tags=["MySQL"])
     Alias cho /students/search để backward compatibility.
     """
 )
-async def mysql_search(
+def mysql_search(
     q: str = Query(..., description="Search query", example="Nguyễn"),
     limit: int = Query(50, ge=1, le=100, description="Max results")
 ):
@@ -55,7 +55,7 @@ async def mysql_search(
     summary="Thống kê database MySQL",
     description="Lấy thống kê tổng quan về students, links, connections"
 )
-async def mysql_stats():
+def mysql_stats():
     """Get MySQL database statistics."""
     if not HAS_MYSQL:
         raise HTTPException(status_code=503, detail="MySQL not available")
@@ -81,7 +81,7 @@ async def mysql_stats():
     - /api/mysql/students/search?q=2012345
     """
 )
-async def search_students(
+def search_students(
     q: str = Query(..., description="Tên hoặc MSSV sinh viên", example="Nguyễn"),
     limit: int = Query(50, ge=1, le=100, description="Số kết quả tối đa")
 ):
@@ -110,7 +110,7 @@ async def search_students(
     summary="Quick search sinh viên (chỉ count links)",
     description="Tìm nhanh sinh viên, chỉ trả về thông tin cơ bản + số lượng links"
 )
-async def quick_search_students(
+def quick_search_students(
     q: str = Query(..., description="Tên hoặc MSSV sinh viên", example="Trần"),
     limit: int = Query(20, ge=1, le=50, description="Số kết quả tối đa")
 ):
@@ -139,7 +139,7 @@ async def quick_search_students(
     summary="Lấy thông tin sinh viên theo MSSV (exact)",
     description="Lấy tất cả links của sinh viên theo MSSV (exact match)"
 )
-async def get_student_by_mssv(
+def get_student_by_mssv(
     mssv: str = Path(..., description="MSSV của sinh viên", example="2012345")
 ):
     """Get student by exact MSSV."""
