@@ -7,21 +7,22 @@ export default function SearchBar() {
   const navigate = useNavigate();
   const [q, setQ] = useState(sp.get("q") || "");
 
+  // Sync input with URL on mount/navigation
   useEffect(() => {
-    const id = setTimeout(() => {
-      const next = new URLSearchParams(sp);
-      if (q) next.set("q", q);
-      else next.delete("q");
-      
-      // Always stay on the landing page
-      navigate({ pathname: "/", search: next.toString() }, { replace: true });
-    }, 400);
-    return () => clearTimeout(id);
-  }, [q, navigate, sp]);
+    setQ(sp.get("q") || "");
+  }, [sp]);
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    const next = new URLSearchParams();
+    if (q.trim()) next.set("q", q.trim());
+    
+    navigate({ pathname: "/", search: next.toString() }, { replace: true });
+  };
 
   return (
     <div className="relative">
-      <form onSubmit={(e) => e.preventDefault()} className="relative">
+      <form onSubmit={handleSubmit} className="relative">
         <div className="relative flex items-center">
           <svg 
             className="absolute left-4 w-5 h-5 text-gray-400"
@@ -33,7 +34,7 @@ export default function SearchBar() {
           </svg>
           <input
             className="w-full pl-12 pr-4 py-4 text-lg rounded-2xl border-2 border-gray-200 focus:border-blue-500 focus:outline-none focus:ring-4 focus:ring-blue-100 transition-all"
-            placeholder="Tìm kiếm theo tên hoặc MSSV (tối thiểu 2 ký tự)..."
+            placeholder="Tìm kiếm theo tên hoặc MSSV (tối thiểu 2 ký tự)... Nhấn Enter để tìm"
             value={q}
             onChange={(e) => setQ(e.target.value)}
           />

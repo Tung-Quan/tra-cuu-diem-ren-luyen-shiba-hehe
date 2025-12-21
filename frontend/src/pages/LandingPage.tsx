@@ -161,10 +161,31 @@ export default function LandingPage() {
 
       {/* Footer */}
       <footer className="bg-slate-900 text-slate-300 py-8 mt-16">
-        <div className="max-w-6xl mx-auto px-6 text-center">
-          <p className="text-sm">
-            © 2024 Hệ Thống Tra Cứu Sinh Viên. All rights reserved.
-          </p>
+        <div className="max-w-6xl mx-auto px-6">
+          <div className="flex flex-col md:flex-row items-center justify-between gap-4">
+            <p className="text-sm">
+              © 2024 Hệ Thống Tra Cứu Sinh Viên. All rights reserved.
+            </p>
+            <div className="flex items-center gap-6">
+              <a
+                href="/contact"
+                className="text-sm hover:text-white transition-colors flex items-center gap-2"
+              >
+                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+                </svg>
+                Liên Hệ & Hỗ Trợ
+              </a>
+              <a
+                href="https://buymeacoffee.com/tungquan32w"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-sm hover:text-yellow-400 transition-colors flex items-center gap-2"
+              >
+                ☕ Ủng Hộ
+              </a>
+            </div>
+          </div>
         </div>
       </footer>
     </div>
