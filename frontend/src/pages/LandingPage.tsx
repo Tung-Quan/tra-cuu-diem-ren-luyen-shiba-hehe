@@ -1,7 +1,7 @@
 // src/pages/LandingPage.tsx
 import { useEffect, useState } from "react";
 import { useSearchParams } from "react-router-dom";
-import { mysqlSearch, getHealth, type MySQLStudent, type HealthResponse } from "../lib/api";
+import { mysqlSearch, getDbStats, type MySQLStudent, type DBStatsResponse } from "../lib/api";
 import SearchBar from "../components/SearchBar";
 import Loading from "../components/Loading";
 import ErrorBanner from "../components/ErrorBanner";
@@ -14,14 +14,13 @@ export default function LandingPage() {
   const [err, setErr] = useState<string>();
   const [execTime, setExecTime] = useState<number>(0);
   const [limit, setLimit] = useState(50);
-  const [healthData, setHealthData] = useState<HealthResponse>();
-  const [showHealth, setShowHealth] = useState(false);
+  const [statsData, setStatsData] = useState<DBStatsResponse>();
 
-  // Load health data on mount
+  // Load stats data on mount
   useEffect(() => {
-    getHealth()
-      .then(r => setHealthData(r.data))
-      .catch(() => {});
+    getDbStats()
+      .then(r => setStatsData(r.data))
+      .catch(() => { });
   }, []);
 
   // Search when query changes
@@ -51,7 +50,7 @@ export default function LandingPage() {
       {/* Hero Section with Health Status */}
       <div className="relative overflow-hidden bg-gradient-to-r from-slate-900 via-slate-800 to-slate-900 text-white">
         <div className="absolute inset-0 bg-[url('data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNjAiIGhlaWdodD0iNjAiIHZpZXdCb3g9IjAgMCA2MCA2MCIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48ZyBmaWxsPSJub25lIiBmaWxsLXJ1bGU9ImV2ZW5vZGQiPjxnIGZpbGw9IiNmZmYiIGZpbGwtb3BhY2l0eT0iMC4wNSI+PHBhdGggZD0iTTM2IDE2YzAtNC40MTggMy41ODItOCA4LThzOCAzLjU4MiA4IDgtMy41ODIgOC04IDgtOC0zLjU4Mi04LTh6bS04IDBjMC00LjQxOCAzLjU4Mi04IDgtOHM4IDMuNTgyIDggOC0zLjU4MiA4LTggOC04LTMuNTgyLTgtOHptLTE2IDBjMC00LjQxOCAzLjU4Mi04IDgtOHM4IDMuNTgyIDggOC0zLjU4MiA4LTggOC04LTMuNTgyLTgtOHoiLz48L2c+PC9nPjwvc3ZnPg==')] opacity-20"></div>
-        
+
         <div className="relative max-w-7xl mx-auto px-6 py-16">
           {/* Title Section */}
           <div className="text-center mb-12">
@@ -59,7 +58,7 @@ export default function LandingPage() {
               <span className="w-2 h-2 bg-green-400 rounded-full animate-pulse"></span>
               <span className="text-sm font-medium">System Online</span>
             </div>
-            
+
             <h1 className="text-5xl md:text-6xl font-bold mb-4 tracking-tight">
               Tra Cứu Sinh Viên
             </h1>
@@ -68,82 +67,27 @@ export default function LandingPage() {
             </p>
           </div>
 
-          {/* Health Status Cards */}
-          {healthData && (
+          {/* Database Statistics Cards */}
+          {statsData && (
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
               <div className="bg-white/10 backdrop-blur-md rounded-2xl p-6 border border-white/20">
-                <div className="text-3xl font-bold mb-1">{healthData.database_rows.toLocaleString()}</div>
-                <div className="text-sm text-slate-300">Database Records</div>
+                <div className="text-3xl font-bold mb-1">{statsData.students.toLocaleString()}</div>
+                <div className="text-sm text-slate-300">Total Students</div>
               </div>
-              
+
               <div className="bg-white/10 backdrop-blur-md rounded-2xl p-6 border border-white/20">
-                <div className="text-3xl font-bold mb-1">{healthData.links.total.toLocaleString()}</div>
+                <div className="text-3xl font-bold mb-1">{statsData.links.toLocaleString()}</div>
                 <div className="text-sm text-slate-300">Total Links</div>
               </div>
-              
-              <div className="bg-white/10 backdrop-blur-md rounded-2xl p-6 border border-white/20">
-                <div className="text-3xl font-bold mb-1">{healthData.links.unique_urls.toLocaleString()}</div>
-                <div className="text-sm text-slate-300">Unique URLs</div>
-              </div>
-              
-              <div className="bg-white/10 backdrop-blur-md rounded-2xl p-6 border border-white/20">
-                <div className="text-3xl font-bold mb-1">{healthData.sheets.length}</div>
-                <div className="text-sm text-slate-300">Sheets Indexed</div>
-              </div>
-            </div>
-          )}
 
-          {/* Services Status - Expandable */}
-          <div className="flex justify-center">
-            <button
-              onClick={() => setShowHealth(!showHealth)}
-              className="group inline-flex items-center gap-2 px-6 py-3 bg-white/10 hover:bg-white/20 backdrop-blur-md rounded-full border border-white/20 transition-all duration-300"
-            >
-              <span className="text-sm font-medium">System Services</span>
-              <svg 
-                className={`w-4 h-4 transition-transform duration-300 ${showHealth ? 'rotate-180' : ''}`}
-                fill="none" 
-                viewBox="0 0 24 24" 
-                stroke="currentColor"
-              >
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-              </svg>
-            </button>
-          </div>
+              <div className="bg-white/10 backdrop-blur-md rounded-2xl p-6 border border-white/20">
+                <div className="text-3xl font-bold mb-1">{statsData.connections.toLocaleString()}</div>
+                <div className="text-sm text-slate-300">Connections</div>
+              </div>
 
-          {showHealth && healthData && (
-            <div className="mt-6 bg-white/10 backdrop-blur-md rounded-2xl p-6 border border-white/20 animate-in fade-in slide-in-from-top-4 duration-500">
-              <div className="grid md:grid-cols-2 gap-6">
-                <div>
-                  <h3 className="text-lg font-semibold mb-4 flex items-center gap-2">
-                    <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
-                    </svg>
-                    Service Status
-                  </h3>
-                  <div className="space-y-3">
-                    <StatusItem label="MySQL Database" active={healthData.mysql_available} />
-                    <StatusItem label="Google Sheets API" active={healthData.gspread_available} />
-                    <StatusItem label="Google Drive API" active={healthData.google_api_available} />
-                    <StatusItem label="Deep Scan Mode" active={healthData.deep_scan} />
-                  </div>
-                </div>
-                
-                <div>
-                  <h3 className="text-lg font-semibold mb-4 flex items-center gap-2">
-                    <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-                    </svg>
-                    Indexed Sheets
-                  </h3>
-                  <div className="max-h-32 overflow-y-auto space-y-2 pr-2 custom-scrollbar">
-                    {healthData.sheets.map((sheet, idx) => (
-                      <div key={idx} className="text-sm bg-white/5 rounded-lg px-3 py-2 border border-white/10">
-                        {sheet}
-                      </div>
-                    ))}
-                  </div>
-                </div>
+              <div className="bg-white/10 backdrop-blur-md rounded-2xl p-6 border border-white/20">
+                <div className="text-3xl font-bold mb-1">{statsData.students_with_links.toLocaleString()}</div>
+                <div className="text-sm text-slate-300">Students with Links</div>
               </div>
             </div>
           )}
@@ -161,7 +105,7 @@ export default function LandingPage() {
                 Kết quả cho: <span className="font-semibold text-gray-900">"{q}"</span>
                 {execTime > 0 && <span className="ml-3 text-gray-400">({execTime.toFixed(2)}ms)</span>}
               </div>
-              
+
               <label className="flex items-center gap-3">
                 <span className="text-gray-700">Giới hạn:</span>
                 <select
@@ -184,7 +128,7 @@ export default function LandingPage() {
               <Loading />
             </div>
           )}
-          
+
           {err && (
             <div className="mt-8">
               <ErrorBanner message={err} />
@@ -227,27 +171,11 @@ export default function LandingPage() {
   );
 }
 
-// Status Item Component
-function StatusItem({ label, active }: { label: string; active: boolean }) {
-  return (
-    <div className="flex items-center justify-between p-3 bg-white/5 rounded-lg border border-white/10">
-      <span className="text-sm">{label}</span>
-      <div className="flex items-center gap-2">
-        <span className={`w-2 h-2 rounded-full ${active ? 'bg-green-400' : 'bg-red-400'}`}></span>
-        <span className="text-xs font-medium">{active ? 'Active' : 'Inactive'}</span>
-      </div>
-    </div>
-  );
-}
-
 // Student Card Component
 function StudentCard({ student }: { student: MySQLStudent }) {
-  const [expanded, setExpanded] = useState(false);
-
   return (
     <div className="group bg-gradient-to-br from-white to-slate-50 rounded-2xl shadow-lg hover:shadow-xl transition-all duration-300 p-6 border border-slate-200">
-      <div className="flex items-start justify-between gap-4">
-        <div className="flex-1">
+      <div className="flex-1">
           {/* Header */}
           <div className="flex items-center gap-3 mb-3">
             <div className="flex items-center justify-center w-10 h-10 bg-gradient-to-br from-blue-500 to-blue-600 text-white rounded-full font-bold text-sm">
@@ -270,8 +198,8 @@ function StudentCard({ student }: { student: MySQLStudent }) {
                 </svg>
                 Tham gia {student.links.length} chương trình
               </div>
-              
-              <div className={`space-y-3 ${expanded ? '' : 'max-h-48 overflow-hidden relative'}`}>
+
+              <div className="space-y-3">
                 {(() => {
                   const links = [...student.links].sort((a, b) => {
                     const ga = (a.gid || a.sheet_name || '').toString();
@@ -337,25 +265,10 @@ function StudentCard({ student }: { student: MySQLStudent }) {
                     </div>
                   ));
                 })()}
-                
-                {!expanded && student.links.length > 2 && (
-                  <div className="absolute bottom-0 left-0 right-0 h-16 bg-gradient-to-t from-white to-transparent"></div>
-                )}
               </div>
             </div>
           )}
         </div>
-
-        {/* Expand Button */}
-        {student.links && student.links.length > 2 && (
-          <button
-            onClick={() => setExpanded(!expanded)}
-            className="flex-shrink-0 px-4 py-2 text-sm text-blue-600 hover:text-blue-800 hover:bg-blue-50 rounded-lg font-medium transition-colors"
-          >
-            {expanded ? '▲ Thu gọn' : '▼ Xem thêm'}
-          </button>
-        )}
-      </div>
     </div>
   );
 }

@@ -101,6 +101,8 @@ export const isAxiosTimeout = (e: unknown): boolean =>
 // ===== API helpers =====
 export const getHealth = () => api.get<HealthResponse>("/api/admin/health");
 
+export const getDbStats = () => api.get<DBStatsResponse>("/api/admin/db-stats");
+
 // QUAN TRỌNG: TẮT TIMEOUT RIÊNG CHO /search (timeout: 0)
 export function search(
   q: string,
