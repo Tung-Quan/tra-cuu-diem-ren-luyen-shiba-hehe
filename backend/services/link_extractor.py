@@ -279,8 +279,7 @@ class LinkExtractor:
                         temp_dir = os.path.join(os.path.dirname(__file__), 'temp_download')
                         os.makedirs(temp_dir, exist_ok=True)
                         
-                        # Download the file
-                        temp_file_path = os.path.join(temp_dir, f"{file_id}_{file_name}")
+                        temp_file_path = os.path.join(temp_dir, f"{file_id}.xlsx")
                         _dlog(f"[link_extractor] Downloading to: {temp_file_path}")
                         
                         request = drive_service.files().get_media(fileId=file_id)
@@ -485,7 +484,8 @@ class LinkExtractor:
             # Download
             temp_dir = os.path.join(os.path.dirname(__file__), 'temp_download')
             os.makedirs(temp_dir, exist_ok=True)
-            temp_file_path = os.path.join(temp_dir, f"{file_id}_{file_name}")
+            # Use only file_id for temp file name to avoid "File name too long" error on Linux
+            temp_file_path = os.path.join(temp_dir, f"{file_id}.docx")
             
             _dlog(f"[link_extractor] Downloading Word file to: {temp_file_path}")
             
