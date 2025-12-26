@@ -51,7 +51,7 @@ export default function LandingPage() {
       <div className="relative overflow-hidden bg-gradient-to-r from-slate-900 via-slate-800 to-slate-900 text-white">
         {/* Background logo (place frontend/public/logo.png) */}
         <div className="absolute inset-0 flex items-center justify-center pointer-events-none opacity-10">
-          <img src="/Logo_ULaw.png" alt="Background logo" className="max-w-xs" />
+          <img src={`${import.meta.env.BASE_URL}Logo_ULaw.png`} alt="Background logo" className="max-w-xs" />
         </div>
 
         <div className="relative z-10 max-w-7xl mx-auto px-6 py-16">

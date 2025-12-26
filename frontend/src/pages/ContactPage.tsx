@@ -44,7 +44,7 @@ export default function ContactPage() {
               {/* QR Code */}
               <div className="bg-white p-6 rounded-2xl border-4 border-gray-100 shadow-lg">
                 <img
-                  src="/bmc_qr.png"
+                  src={`${import.meta.env.BASE_URL}bmc_qr.png`}
                   alt="Buy Me a Coffee QR Code"
                   className="w-64 h-64"
                 />

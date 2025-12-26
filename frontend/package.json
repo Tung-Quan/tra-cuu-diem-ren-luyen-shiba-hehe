@@ -9,7 +9,7 @@
     "lint": "eslint .",
     "preview": "vite preview",
     "predeploy": "npm run build",
-    "deploy": "gh-pages -d dist -t"
+    "deploy": "gh-pages --dist dist --dotfiles --nojekyll"
   },
   "dependencies": {
     "axios": "^1.12.2",
