@@ -30,6 +30,13 @@ jobs:
       - name: Install dependencies
         run: cd frontend && npm ci
 
+      - name: Create production env file
+        run: |
+          cat > frontend/.env.production <<EOF
+          VITE_API_URL=${{ secrets.VITE_API_URL }}
+          VITE_API_TIMEOUT=60000
+          EOF
+
       - name: Build
         run: cd frontend && npm run build
 
