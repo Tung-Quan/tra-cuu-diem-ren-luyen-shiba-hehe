@@ -127,9 +127,8 @@ export default function ContactPage() {
             <div className="text-center mb-6">
               <h2 className="text-2xl font-bold text-gray-900 mb-3">Tính Năng Hệ Thống</h2>
               <p className="text-gray-700 max-w-3xl mx-auto leading-relaxed">
-                Hệ thống hỗ trợ xử lý API <span className="font-semibold text-emerald-700">Google Docs, Google Sheets, Excel, Word</span> và trích xuất thông tin từ <span className="font-semibold text-emerald-700">link có hình ảnh</span>. 
-                <span className="text-sm text-gray-600 block mt-2">(Tính năng PDF đang được phát triển)</span>
-              </p>
+                Hệ thống hỗ trợ xử lý API <span className="font-semibold text-emerald-700">Google Docs, Google Sheets, Excel, Word. 
+                <span className="text-sm text-gray-600 block mt-2">(Tính năng PDF đang được phát triển) </span> và trích xuất thông tin từ <span className="font-semibold text-emerald-700">link có hình ảnh</span>
             </div>
           </div>
 
