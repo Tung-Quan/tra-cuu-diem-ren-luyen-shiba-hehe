@@ -4,6 +4,7 @@ import react from "@vitejs/plugin-react";
 
 export default defineConfig({
   plugins: [react()],
+  base: '/tracuudiemrenluyen/',
   server: {
     port: 5173,
     strictPort: true,
@@ -18,6 +19,7 @@ export default defineConfig({
     // Tắt sourcemap để ẩn source code gốc
     sourcemap: false,
 
+    outDir: 'dist',
     // Minify code để khó đọc hơn
     minify: 'terser',
 
