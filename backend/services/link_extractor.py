@@ -690,44 +690,44 @@ class LinkExtractor:
             }
         
         # Step 2: Process each link
-        all_records = []
+        all_records = []  # Only used for dry_run or summary if needed
         sheets_processed = 0
         docs_processed = 0
+        total_inserted = 0
         
         for link in all_links:
             file_id = link['file_id']
             file_type = link['file_type']
             context = link.get('context', '')
             row = link.get('row', '?')
-            
             col = link.get('col', '?')
             
             _dlog(f"[link_extractor] Processing link at Row {row}, Col {col} - File ID: {file_id} (Type: {file_type})")
             
+            records = []
             if file_type == 'sheets':
                 records = LinkExtractor.process_linked_sheet(file_id, context)
-                # Inject main sheet info
-                for rec in records:
-                    rec['main_sheet'] = ss.title
-                all_records.extend(records)
                 sheets_processed += 1
             
             elif file_type == 'docs':
                 records = LinkExtractor.process_linked_doc(file_id, context)
-                # Inject main sheet info
-                for rec in records:
-                    rec['main_sheet'] = ss.title
-                all_records.extend(records)
                 docs_processed += 1
             
             else:
                 _dlog(f"[link_extractor] Skipping drive file: {file_id} (Row {row}, Col {col})")
-        
-        # Step 3: Populate database (if not dry_run)
-        inserted = 0
-        if not dry_run and all_records:
-            inserted = batch_insert_student_links(all_records)
-            _dlog(f"[link_extractor] Inserted {inserted} student-link records into database")
+                continue
+
+            # Inject main sheet info
+            for rec in records:
+                rec['main_sheet'] = ss.title
+
+            if dry_run:
+                all_records.extend(records)
+            else:
+                if records:
+                    inserted = batch_insert_student_links(records)
+                    total_inserted += inserted
+                    _dlog(f"[link_extractor] Inserted {inserted} records from {file_id}")
         
         result = {
             "ok": True,
@@ -735,13 +735,16 @@ class LinkExtractor:
             "links_found": len(all_links),
             "sheets_processed": sheets_processed,
             "docs_processed": docs_processed,
-            "students_found": len(all_records),
         }
         
         if dry_run:
+            result['students_found'] = len(all_records)
             result['records'] = all_records[:20]  # Sample only
             result['total_records'] = len(all_records)
         else:
-            result['students_inserted'] = inserted
+            result['students_inserted'] = total_inserted
+            # In non-dry-run, we don't track total found to save memory, 
+            # or we could track a simple counter if needed.
+            # Let's trust total_inserted for now.
         
         return result

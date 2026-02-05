@@ -256,6 +256,8 @@ class StudentExtractor:
         
         all_records = []
         sheets_scanned = 0
+        total_found = 0
+        total_inserted = 0
         
         for ws in worksheets:
             sheets_scanned += 1
@@ -267,32 +269,36 @@ class StudentExtractor:
             
             # Extract students
             records = StudentExtractor.extract_students_from_sheet(ws, sheet_url)
-            all_records.extend(records)
             
             _dlog(f"[extractor] Sheet '{ws.title}': found {len(records)} students")
+            
+            if dry_run:
+                all_records.extend(records)
+                total_found += len(records)
+            else:
+                # Insert immediately
+                if records:
+                    inserted = batch_insert_student_links(records)
+                    total_inserted += inserted
+                    total_found += len(records) # still track found count
         
-        students_found = len(all_records)
-        _dlog(f"[extractor] Total students found: {students_found} from {sheets_scanned} sheets")
+        _dlog(f"[extractor] Total students found: {total_found} from {sheets_scanned} sheets")
         
         # Dry run - just return records
         if dry_run:
             return {
                 "ok": True,
                 "sheets_scanned": sheets_scanned,
-                "students_found": students_found,
+                "students_found": total_found,
                 "students_inserted": 0,
                 "records": all_records
             }
         
-        # Insert to database
-        _dlog(f"[extractor] Inserting {students_found} students to database...")
-        inserted = batch_insert_student_links(all_records)
-        
         return {
             "ok": True,
             "sheets_scanned": sheets_scanned,
-            "students_found": students_found,
-            "students_inserted": inserted,
+            "students_found": total_found,
+            "students_inserted": total_inserted,
         }
 
 
